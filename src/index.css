@@ -1,0 +1,71 @@
+@import "tailwindcss";
+
+/* Strictly Mobile-Only Optimizations (< 768px) — Desktop & Laptop views (>= 768px) are 100% untouched */
+@media (max-width: 767px) {
+  /* Hide scrollbars on horizontal swipeable tab & pill strips on mobile */
+  .mobile-no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .mobile-no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Smooth touch momentum scrolling for all data tables on mobile */
+  .overflow-auto,
+  .overflow-x-auto {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Pin the first column (Symbol / Ticker) on all wide matrix tables on mobile viewports
+     so users always see the stock symbol while swiping across Laya Intel & 8 timeframes */
+  .overflow-auto > table > thead > tr > th:first-child,
+  .overflow-x-auto > table > thead > tr > th:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 30;
+    background-color: #111318;
+    min-width: 126px !important;
+    width: 126px !important;
+    max-width: 136px !important;
+    padding-left: 0.625rem !important;
+    padding-right: 0.5rem !important;
+    border-right: 1px solid #2a2d32;
+    box-shadow: 4px 0 10px rgba(0, 0, 0, 0.55);
+  }
+
+  .overflow-auto > table > tbody > tr > td:first-child,
+  .overflow-x-auto > table > tbody > tr > td:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 15;
+    background-color: #0d0e12;
+    min-width: 126px !important;
+    width: 126px !important;
+    max-width: 136px !important;
+    padding-left: 0.625rem !important;
+    padding-right: 0.5rem !important;
+    border-right: 1px solid #2a2d32;
+    box-shadow: 4px 0 10px rgba(0, 0, 0, 0.55);
+  }
+
+  /* Ensure company description inside sticky mobile symbol column truncates cleanly */
+  .overflow-auto > table > tbody > tr > td:first-child span.truncate,
+  .overflow-x-auto > table > tbody > tr > td:first-child span.truncate {
+    max-width: 92px !important;
+  }
+
+  /* Optimize vertical table container height on mobile screens */
+  .overflow-auto.min-h-\[600px\] {
+    min-height: 420px !important;
+    max-height: 68vh !important;
+  }
+
+  /* Prevent iOS/Android auto-zoom on form inputs while keeping compact desktop styling untouched */
+  input[type="text"],
+  input[type="url"],
+  select {
+    font-size: 13px;
+  }
+}
