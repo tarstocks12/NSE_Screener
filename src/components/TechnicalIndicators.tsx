@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { safeParseJson } from "../lib/safe-fetch.js";
 import { createChart, ColorType, LineStyle, UTCTimestamp, CandlestickSeries, LineSeries, HistogramSeries } from "lightweight-charts";
 import { 
   TrendingUp, 
@@ -191,11 +192,11 @@ export default function TechnicalIndicators({
         if (!response.ok) {
           throw new Error("Failed fetching stock history candles");
         }
-        const parsed = await response.json();
-        if (parsed.status === "ok" && Array.isArray(parsed.data)) {
+        const parsed = await safeParseJson<any>(response);
+        if (parsed?.status === "ok" && Array.isArray(parsed.data)) {
           setHistory(parsed.data);
         } else {
-          throw new Error(parsed.message || "Invalid payload format");
+          throw new Error(parsed?.message || "Invalid payload format");
         }
       } catch (err: any) {
         console.error("Indicator page history fetch error:", err);

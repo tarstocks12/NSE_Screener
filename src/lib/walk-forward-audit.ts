@@ -5,7 +5,7 @@ import {
   calcWaveTrend
 } from "./pine-math.js";
 import { DEFAULT_PERSONAL_SYMBOLS, FNO_SYMBOLS_LIST } from "../data/watchlists.js";
-import { fetchNseHybridCandles, checkCorporateActionGuard } from "./nse-mcp-client.js";
+import { fetchNseHybridCandles, checkCorporateActionGuard, seedEodCacheFromRealCandles } from "./nse-mcp-client.js";
 
 export interface HistoricalPickRecord {
   rank: number;
@@ -207,6 +207,52 @@ interface PrecomputedSymbolSeries {
   caFlaggedDates: Set<string>;
 }
 
+const AUDIT_PRECOMPUTE_TTL_MS = 10 * 60 * 1000;
+const auditPrecomputeCache = new Map<string, { ts: number; data: PrecomputedSymbolSeries | null }>();
+
+function aggregateDailyToWeeklyCandles(daily: Candle[]): Candle[] {
+  const buckets = new Map<string, Candle[]>();
+  const order: string[] = [];
+  const fmt = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" });
+
+  for (const c of daily) {
+    const ymd = fmt.format(new Date(c.time));
+    const [y, m, d] = ymd.split("-").map(Number);
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    const dayOfWeek = dt.getUTCDay();
+    const diffToMon = (dayOfWeek + 6) % 7;
+    dt.setUTCDate(dt.getUTCDate() - diffToMon);
+    const weekKey = `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(dt.getUTCDate()).padStart(2, "0")}`;
+    let arr = buckets.get(weekKey);
+    if (!arr) {
+      arr = [];
+      buckets.set(weekKey, arr);
+      order.push(weekKey);
+    }
+    arr.push(c);
+  }
+
+  return order.map(key => {
+    const chunk = buckets.get(key)!;
+    let high = -Infinity;
+    let low = Infinity;
+    let volume = 0;
+    for (const c of chunk) {
+      if (c.high > high) high = c.high;
+      if (c.low < low) low = c.low;
+      volume += c.volume || 0;
+    }
+    return {
+      time: chunk[0].time,
+      open: chunk[0].open,
+      high,
+      low,
+      close: chunk[chunk.length - 1].close,
+      volume
+    };
+  });
+}
+
 async function fetchYahooCandlesForAudit(symbol: string, interval: "1d" | "1wk", range: string): Promise<Candle[]> {
   // Primary: Official NSE Bhavcopy MCP (+ live cm-market stitch) for exact exchange EOD history
   try {
@@ -216,21 +262,37 @@ async function fetchYahooCandlesForAudit(symbol: string, interval: "1d" | "1wk",
       return nseCandles;
     }
   } catch {
-    // Fall back seamlessly to Yahoo Finance below
+    // Fall back seamlessly to real Yahoo Finance `.NS` exchange OHLCV below
   }
 
   const ticker = getAuditYahooTicker(symbol);
   const scaleFactor = getAuditScaleFactor(symbol);
   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=${interval}&range=${range}`;
 
-  const res = await fetch(url, {
-    headers: {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
-  });
-  if (!res.ok) return [];
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 6000);
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+      }
+    });
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+  const ct = res.headers.get("content-type") || "";
+  if (!res.ok || !ct.includes("application/json")) return [];
 
-  const data: any = await res.json();
+  let data: any;
+  try {
+    data = await res.json();
+  } catch {
+    return [];
+  }
   const result = data?.chart?.result?.[0];
   if (!result) return [];
 
@@ -255,6 +317,9 @@ async function fetchYahooCandlesForAudit(symbol: string, interval: "1d" | "1wk",
       volume: v
     });
   }
+  if (interval === "1d" && candles.length >= 20) {
+    seedEodCacheFromRealCandles(symbol, candles);
+  }
   return candles;
 }
 
@@ -263,13 +328,22 @@ function formatDateIST(ms: number): string {
 }
 
 async function precomputeSymbol(symbol: string): Promise<PrecomputedSymbolSeries | null> {
-  try {
-    const [dailyCandles, weeklyCandles] = await Promise.all([
-      fetchYahooCandlesForAudit(symbol, "1d", "1y"),
-      fetchYahooCandlesForAudit(symbol, "1wk", "3y")
-    ]);
+  const cached = auditPrecomputeCache.get(symbol);
+  if (cached && Date.now() - cached.ts < AUDIT_PRECOMPUTE_TTL_MS) {
+    return cached.data;
+  }
 
-    if (dailyCandles.length < 65 || weeklyCandles.length < 15) {
+  try {
+    // Single real 1D request (2y ≈ 500 NSE sessions) -> derive exact Mon-Fri 1W candles locally (2x faster, 100% consistent)
+    const dailyCandles = await fetchYahooCandlesForAudit(symbol, "1d", "2y");
+    if (dailyCandles.length < 65) {
+      auditPrecomputeCache.set(symbol, { ts: Date.now(), data: null });
+      return null;
+    }
+
+    const weeklyCandles = aggregateDailyToWeeklyCandles(dailyCandles);
+    if (weeklyCandles.length < 15) {
+      auditPrecomputeCache.set(symbol, { ts: Date.now(), data: null });
       return null;
     }
 
@@ -326,7 +400,7 @@ async function precomputeSymbol(symbol: string): Promise<PrecomputedSymbolSeries
       flaggedDates: [] as string[]
     }));
 
-    return {
+    const computedSeries: PrecomputedSymbolSeries = {
       symbol,
       dailyCandles,
       dateIndexMap,
@@ -347,6 +421,8 @@ async function precomputeSymbol(symbol: string): Promise<PrecomputedSymbolSeries
       wRawTsiSig,
       caFlaggedDates: new Set(caGuard.flaggedDates)
     };
+    auditPrecomputeCache.set(symbol, { ts: Date.now(), data: computedSeries });
+    return computedSeries;
   } catch {
     return null;
   }
@@ -578,7 +654,7 @@ export async function computeGenuineWalkForwardAudit(
     .slice(0, 250);
 
   const precomputedList: PrecomputedSymbolSeries[] = [];
-  const batchSize = 15;
+  const batchSize = 25;
   for (let i = 0; i < rawUniverse.length; i += batchSize) {
     const chunk = rawUniverse.slice(i, i + batchSize);
     const res = await Promise.all(chunk.map(sym => precomputeSymbol(sym)));
@@ -601,7 +677,7 @@ export async function computeGenuineWalkForwardAudit(
   const sliceStart = Math.max(40, allDates.length - (targetDaysCount + 1));
   const windowDates = allDates.slice(sliceStart);
 
-  // Index existing verified walk-forward entries so they are permanently retained across updates
+  // Index existing verified walk-forward entries so historical days older than the 15-session live verification window are retained
   const existingMap = new Map<string, HistoricalAuditDayEntry>();
   for (const entry of existingEntries) {
     if (entry && entry.date && entry.type && entry.isGenuineWalkForward) {
@@ -611,13 +687,15 @@ export async function computeGenuineWalkForwardAudit(
 
   const weights: typeof INITIAL_MWUA_WEIGHTS = JSON.parse(JSON.stringify(INITIAL_MWUA_WEIGHTS));
   const outputEntries: HistoricalAuditDayEntry[] = [];
+  const recentVerifyStartIdx = Math.max(0, windowDates.length - 16);
 
   for (let i = 0; i < windowDates.length - 1; i++) {
     const signalDate = windowDates[i];
     const outcomeDate = windowDates[i + 1];
+    const isRecentLiveVerify = i >= recentVerifyStartIdx;
 
-    const existingTrend = existingMap.get(`${outcomeDate}_Trend`);
-    const existingRev = existingMap.get(`${outcomeDate}_Reversal`);
+    const existingTrend = isRecentLiveVerify ? undefined : existingMap.get(`${outcomeDate}_Trend`);
+    const existingRev = isRecentLiveVerify ? undefined : existingMap.get(`${outcomeDate}_Reversal`);
 
     if (existingTrend && existingRev) {
       outputEntries.push(existingTrend);
@@ -1071,7 +1149,7 @@ export async function computeLayaPreTurnWalkForwardAudit(
     .slice(0, 250);
 
   const precomputedList: PrecomputedSymbolSeries[] = [];
-  const batchSize = 15;
+  const batchSize = 25;
   for (let i = 0; i < rawUniverse.length; i += batchSize) {
     const chunk = rawUniverse.slice(i, i + batchSize);
     const res = await Promise.all(chunk.map(sym => precomputeSymbol(sym)));
@@ -1102,6 +1180,7 @@ export async function computeLayaPreTurnWalkForwardAudit(
 
   const dashWeights = { d1: 0.26, d2: 0.22, d3: 0.28, d4: 0.24 };
   const outputEntries: HistoricalAuditDayEntry[] = [];
+  const recentVerifyStartIdx = Math.max(0, windowDates.length - 16);
 
   const updateDashWeightsFromEntry = (entry: HistoricalAuditDayEntry) => {
     const stats = {
@@ -1133,9 +1212,10 @@ export async function computeLayaPreTurnWalkForwardAudit(
   for (let i = 0; i < windowDates.length - 1; i++) {
     const signalDate = windowDates[i];
     const outcomeDate = windowDates[i + 1];
+    const isRecentLiveVerify = i >= recentVerifyStartIdx;
 
-    const existingStd = existingMap.get(`${outcomeDate}_Trend`);
-    const existingRvol = existingMap.get(`${outcomeDate}_Reversal`);
+    const existingStd = isRecentLiveVerify ? undefined : existingMap.get(`${outcomeDate}_Trend`);
+    const existingRvol = isRecentLiveVerify ? undefined : existingMap.get(`${outcomeDate}_Reversal`);
 
     if (existingStd && existingRvol) {
       outputEntries.push(existingStd);

@@ -1,57 +1,57 @@
 {
   "version": 2,
-  "updatedAt": "2026-11-23T18:47:17.280Z",
-  "totalWalkForwardSamples": 2200,
+  "updatedAt": "2026-11-25T14:53:39.942Z",
+  "totalWalkForwardSamples": 2360,
   "totalPreTurnAudits": 1200,
-  "overallPreTurnConversionPct": 52,
-  "avgBrierReward": 0.7422,
-  "brierScore": 0.2865,
-  "logLoss": 0.7756,
-  "expectedCalibrationError": 0.1613,
+  "overallPreTurnConversionPct": 56,
+  "avgBrierReward": 0.7437,
+  "brierScore": 0.284,
+  "logLoss": 0.7703,
+  "expectedCalibrationError": 0.1565,
   "temperature": [
     1.85,
     1.85,
     2.2
   ],
   "dashboardWeights": {
-    "d1_hma": 0.261,
-    "d2_st": 0.233,
-    "d3_wt": 0.258,
-    "d4_tsi": 0.248
+    "d1_hma": 0.257,
+    "d2_st": 0.252,
+    "d3_wt": 0.246,
+    "d4_tsi": 0.245
   },
   "dashboardWinRates": {
-    "d1_hma": 53,
-    "d2_st": 47,
-    "d3_wt": 52,
-    "d4_tsi": 50,
-    "htf_confl": 50
+    "d1_hma": 56,
+    "d2_st": 55,
+    "d3_wt": 54,
+    "d4_tsi": 54,
+    "htf_confl": 56
   },
   "timeframeWeights": {
-    "5m": 0.68,
-    "15m": 1.55,
-    "1H": 1.88,
-    "3H": 3.71,
-    "4H": 4.46,
-    "1D": 7.33,
-    "3D": 7.24,
-    "1W": 8.56
+    "5m": 0.9,
+    "15m": 1.47,
+    "1H": 2.58,
+    "3H": 3.02,
+    "4H": 4.24,
+    "1D": 6.44,
+    "3D": 5.76,
+    "1W": 7.07
   },
   "timeframeConversionRates": {
-    "5m": 45,
-    "15m": 71,
-    "1H": 50,
-    "3H": 86,
-    "4H": 77,
-    "1D": 85,
-    "3D": 92,
-    "1W": 92
+    "5m": 61,
+    "15m": 67,
+    "1H": 71,
+    "3H": 69,
+    "4H": 73,
+    "1D": 74,
+    "3D": 72,
+    "1W": 75
   },
   "rlcdLogitWeights": {
-    "ctfConfluenceWeight": 0.3721,
-    "htfConfluenceWeight": 0.4733,
+    "ctfConfluenceWeight": 0.4897,
+    "htfConfluenceWeight": 0.6339,
     "rvolClimaxWeight": 0.64,
     "wickRejectionWeight": 0.52,
-    "oscillatorStretchWeight": 1.01,
+    "oscillatorStretchWeight": 1.0277,
     "freshCrossWeight": 0.68,
     "agedCrossPenalty": 0.74,
     "lowVolFlagPenalty": 0.66
@@ -59,19 +59,19 @@
   "symbolProfiles": {
     "DIVISLAB": {
       "symbol": "DIVISLAB",
-      "preTurnHits": 38,
-      "preTurnTotal": 75,
-      "conversionRatePct": 51,
-      "avgMfePct": 0.75,
-      "reliabilityPrior": -5
+      "preTurnHits": 29,
+      "preTurnTotal": 60,
+      "conversionRatePct": 49,
+      "avgMfePct": 0.73,
+      "reliabilityPrior": -6
     },
     "GLENMARK": {
       "symbol": "GLENMARK",
-      "preTurnHits": 26,
-      "preTurnTotal": 50,
-      "conversionRatePct": 53,
-      "avgMfePct": 0.76,
-      "reliabilityPrior": -5
+      "preTurnHits": 24,
+      "preTurnTotal": 44,
+      "conversionRatePct": 56,
+      "avgMfePct": 0.78,
+      "reliabilityPrior": -3
     },
     "COFORGE": {
       "symbol": "COFORGE",
@@ -84,154 +84,154 @@
     "HYUNDAI": {
       "symbol": "HYUNDAI",
       "preTurnHits": 13,
-      "preTurnTotal": 22,
-      "conversionRatePct": 60,
-      "avgMfePct": 0.81,
-      "reliabilityPrior": -2
+      "preTurnTotal": 20,
+      "conversionRatePct": 65,
+      "avgMfePct": 0.85,
+      "reliabilityPrior": 0
     },
     "BAJAJHLDNG": {
       "symbol": "BAJAJHLDNG",
-      "preTurnHits": 9,
-      "preTurnTotal": 24,
-      "conversionRatePct": 42,
-      "avgMfePct": 0.65,
-      "reliabilityPrior": -8
+      "preTurnHits": 7,
+      "preTurnTotal": 16,
+      "conversionRatePct": 48,
+      "avgMfePct": 0.7,
+      "reliabilityPrior": -6
     },
     "CDSL": {
       "symbol": "CDSL",
-      "preTurnHits": 8,
-      "preTurnTotal": 19,
-      "conversionRatePct": 46,
-      "avgMfePct": 0.69,
-      "reliabilityPrior": -7
+      "preTurnHits": 7,
+      "preTurnTotal": 15,
+      "conversionRatePct": 51,
+      "avgMfePct": 0.72,
+      "reliabilityPrior": -5
     },
     "HINDZINC": {
       "symbol": "HINDZINC",
-      "preTurnHits": 12,
-      "preTurnTotal": 22,
-      "conversionRatePct": 56,
-      "avgMfePct": 0.77,
-      "reliabilityPrior": -3
+      "preTurnHits": 9,
+      "preTurnTotal": 19,
+      "conversionRatePct": 51,
+      "avgMfePct": 0.72,
+      "reliabilityPrior": -5
     },
     "ETERNAL": {
       "symbol": "ETERNAL",
-      "preTurnHits": 29,
-      "preTurnTotal": 52,
-      "conversionRatePct": 57,
-      "avgMfePct": 0.78,
-      "reliabilityPrior": -3
+      "preTurnHits": 21,
+      "preTurnTotal": 39,
+      "conversionRatePct": 55,
+      "avgMfePct": 0.77,
+      "reliabilityPrior": -4
     },
     "BOSCHLTD": {
       "symbol": "BOSCHLTD",
-      "preTurnHits": 15,
-      "preTurnTotal": 34,
-      "conversionRatePct": 46,
-      "avgMfePct": 0.7,
+      "preTurnHits": 13,
+      "preTurnTotal": 29,
+      "conversionRatePct": 47,
+      "avgMfePct": 0.71,
       "reliabilityPrior": -7
     },
     "DIXON": {
       "symbol": "DIXON",
-      "preTurnHits": 20,
-      "preTurnTotal": 35,
-      "conversionRatePct": 58,
+      "preTurnHits": 18,
+      "preTurnTotal": 32,
+      "conversionRatePct": 57,
       "avgMfePct": 0.79,
       "reliabilityPrior": -3
     },
     "HDFCBANK": {
       "symbol": "HDFCBANK",
-      "preTurnHits": 21,
-      "preTurnTotal": 43,
-      "conversionRatePct": 50,
-      "avgMfePct": 0.73,
+      "preTurnHits": 18,
+      "preTurnTotal": 38,
+      "conversionRatePct": 49,
+      "avgMfePct": 0.72,
       "reliabilityPrior": -6
     },
     "DABUR": {
       "symbol": "DABUR",
       "preTurnHits": 12,
-      "preTurnTotal": 30,
-      "conversionRatePct": 43,
-      "avgMfePct": 0.67,
-      "reliabilityPrior": -8
+      "preTurnTotal": 28,
+      "conversionRatePct": 46,
+      "avgMfePct": 0.69,
+      "reliabilityPrior": -7
     },
     "ICICIGI": {
       "symbol": "ICICIGI",
-      "preTurnHits": 33,
-      "preTurnTotal": 66,
+      "preTurnHits": 32,
+      "preTurnTotal": 64,
       "conversionRatePct": 51,
       "avgMfePct": 0.74,
       "reliabilityPrior": -5
     },
     "DMART": {
       "symbol": "DMART",
-      "preTurnHits": 25,
-      "preTurnTotal": 41,
-      "conversionRatePct": 61,
-      "avgMfePct": 0.82,
-      "reliabilityPrior": -2
+      "preTurnHits": 21,
+      "preTurnTotal": 37,
+      "conversionRatePct": 58,
+      "avgMfePct": 0.79,
+      "reliabilityPrior": -3
     },
     "BANKBARODA": {
       "symbol": "BANKBARODA",
-      "preTurnHits": 23,
-      "preTurnTotal": 43,
-      "conversionRatePct": 55,
-      "avgMfePct": 0.77,
-      "reliabilityPrior": -4
+      "preTurnHits": 19,
+      "preTurnTotal": 41,
+      "conversionRatePct": 48,
+      "avgMfePct": 0.72,
+      "reliabilityPrior": -6
     },
     "COLPAL": {
       "symbol": "COLPAL",
-      "preTurnHits": 21,
-      "preTurnTotal": 44,
-      "conversionRatePct": 49,
-      "avgMfePct": 0.73,
-      "reliabilityPrior": -6
+      "preTurnHits": 19,
+      "preTurnTotal": 36,
+      "conversionRatePct": 54,
+      "avgMfePct": 0.76,
+      "reliabilityPrior": -4
     },
     "CAMS": {
       "symbol": "CAMS",
       "preTurnHits": 3,
-      "preTurnTotal": 9,
-      "conversionRatePct": 43,
-      "avgMfePct": 0.62,
-      "reliabilityPrior": -8
+      "preTurnTotal": 8,
+      "conversionRatePct": 47,
+      "avgMfePct": 0.65,
+      "reliabilityPrior": -7
     },
     "DRREDDY": {
       "symbol": "DRREDDY",
       "preTurnHits": 34,
-      "preTurnTotal": 68,
-      "conversionRatePct": 51,
+      "preTurnTotal": 69,
+      "conversionRatePct": 50,
       "avgMfePct": 0.74,
-      "reliabilityPrior": -5
+      "reliabilityPrior": -6
     },
     "HINDUNILVR": {
       "symbol": "HINDUNILVR",
       "preTurnHits": 22,
-      "preTurnTotal": 53,
-      "conversionRatePct": 43,
-      "avgMfePct": 0.68,
+      "preTurnTotal": 52,
+      "conversionRatePct": 44,
+      "avgMfePct": 0.69,
       "reliabilityPrior": -8
     },
     "INOXWIND": {
       "symbol": "INOXWIND",
-      "preTurnHits": 23,
-      "preTurnTotal": 46,
-      "conversionRatePct": 51,
-      "avgMfePct": 0.74,
+      "preTurnHits": 18,
+      "preTurnTotal": 35,
+      "conversionRatePct": 53,
+      "avgMfePct": 0.75,
       "reliabilityPrior": -5
     },
     "GODREJCP": {
       "symbol": "GODREJCP",
-      "preTurnHits": 15,
-      "preTurnTotal": 33,
-      "conversionRatePct": 48,
-      "avgMfePct": 0.71,
-      "reliabilityPrior": -6
+      "preTurnHits": 11,
+      "preTurnTotal": 25,
+      "conversionRatePct": 47,
+      "avgMfePct": 0.7,
+      "reliabilityPrior": -7
     },
     "ADANIGREEN": {
       "symbol": "ADANIGREEN",
-      "preTurnHits": 14,
-      "preTurnTotal": 27,
-      "conversionRatePct": 54,
-      "avgMfePct": 0.76,
-      "reliabilityPrior": -4
+      "preTurnHits": 11,
+      "preTurnTotal": 22,
+      "conversionRatePct": 52,
+      "avgMfePct": 0.74,
+      "reliabilityPrior": -5
     },
     "DELHIVERY": {
       "symbol": "DELHIVERY",
@@ -243,24 +243,24 @@
     },
     "BIOCON": {
       "symbol": "BIOCON",
-      "preTurnHits": 21,
-      "preTurnTotal": 39,
+      "preTurnHits": 20,
+      "preTurnTotal": 37,
       "conversionRatePct": 55,
       "avgMfePct": 0.77,
       "reliabilityPrior": -4
     },
     "BAJAJ_AUTO": {
       "symbol": "BAJAJ_AUTO",
-      "preTurnHits": 19,
-      "preTurnTotal": 30,
-      "conversionRatePct": 64,
-      "avgMfePct": 0.84,
-      "reliabilityPrior": 0
+      "preTurnHits": 18,
+      "preTurnTotal": 27,
+      "conversionRatePct": 67,
+      "avgMfePct": 0.86,
+      "reliabilityPrior": 1
     },
     "DLF": {
       "symbol": "DLF",
-      "preTurnHits": 28,
-      "preTurnTotal": 54,
+      "preTurnHits": 25,
+      "preTurnTotal": 48,
       "conversionRatePct": 53,
       "avgMfePct": 0.76,
       "reliabilityPrior": -5
@@ -268,66 +268,66 @@
     "EICHERMOT": {
       "symbol": "EICHERMOT",
       "preTurnHits": 13,
-      "preTurnTotal": 28,
-      "conversionRatePct": 49,
-      "avgMfePct": 0.72,
+      "preTurnTotal": 27,
+      "conversionRatePct": 50,
+      "avgMfePct": 0.73,
       "reliabilityPrior": -6
     },
     "BHEL": {
       "symbol": "BHEL",
-      "preTurnHits": 29,
-      "preTurnTotal": 53,
-      "conversionRatePct": 56,
-      "avgMfePct": 0.78,
-      "reliabilityPrior": -3
+      "preTurnHits": 27,
+      "preTurnTotal": 46,
+      "conversionRatePct": 59,
+      "avgMfePct": 0.8,
+      "reliabilityPrior": -2
     },
     "IOC": {
       "symbol": "IOC",
-      "preTurnHits": 16,
-      "preTurnTotal": 26,
-      "conversionRatePct": 62,
-      "avgMfePct": 0.83,
-      "reliabilityPrior": -1
+      "preTurnHits": 11,
+      "preTurnTotal": 16,
+      "conversionRatePct": 68,
+      "avgMfePct": 0.88,
+      "reliabilityPrior": 1
     },
     "AUROPHARMA": {
       "symbol": "AUROPHARMA",
-      "preTurnHits": 18,
-      "preTurnTotal": 37,
+      "preTurnHits": 17,
+      "preTurnTotal": 35,
       "conversionRatePct": 50,
       "avgMfePct": 0.73,
       "reliabilityPrior": -6
     },
     "BEL": {
       "symbol": "BEL",
-      "preTurnHits": 10,
-      "preTurnTotal": 23,
-      "conversionRatePct": 47,
-      "avgMfePct": 0.7,
-      "reliabilityPrior": -7
+      "preTurnHits": 8,
+      "preTurnTotal": 21,
+      "conversionRatePct": 43,
+      "avgMfePct": 0.66,
+      "reliabilityPrior": -8
     },
     "HINDPETRO": {
       "symbol": "HINDPETRO",
-      "preTurnHits": 13,
-      "preTurnTotal": 26,
+      "preTurnHits": 11,
+      "preTurnTotal": 22,
       "conversionRatePct": 52,
       "avgMfePct": 0.74,
       "reliabilityPrior": -5
     },
     "AMBUJACEM": {
       "symbol": "AMBUJACEM",
-      "preTurnHits": 23,
-      "preTurnTotal": 47,
-      "conversionRatePct": 50,
-      "avgMfePct": 0.73,
-      "reliabilityPrior": -6
+      "preTurnHits": 22,
+      "preTurnTotal": 44,
+      "conversionRatePct": 51,
+      "avgMfePct": 0.74,
+      "reliabilityPrior": -5
     },
     "CIPLA": {
       "symbol": "CIPLA",
-      "preTurnHits": 7,
-      "preTurnTotal": 16,
-      "conversionRatePct": 48,
-      "avgMfePct": 0.7,
-      "reliabilityPrior": -6
+      "preTurnHits": 5,
+      "preTurnTotal": 10,
+      "conversionRatePct": 55,
+      "avgMfePct": 0.74,
+      "reliabilityPrior": -4
     },
     "IEX": {
       "symbol": "IEX",
@@ -339,131 +339,131 @@
     },
     "HCLTECH": {
       "symbol": "HCLTECH",
-      "preTurnHits": 20,
-      "preTurnTotal": 37,
-      "conversionRatePct": 55,
-      "avgMfePct": 0.77,
-      "reliabilityPrior": -4
+      "preTurnHits": 12,
+      "preTurnTotal": 24,
+      "conversionRatePct": 52,
+      "avgMfePct": 0.74,
+      "reliabilityPrior": -5
     },
     "ICICIBANK": {
       "symbol": "ICICIBANK",
-      "preTurnHits": 27,
-      "preTurnTotal": 57,
+      "preTurnHits": 26,
+      "preTurnTotal": 55,
       "conversionRatePct": 49,
       "avgMfePct": 0.72,
       "reliabilityPrior": -6
     },
     "ADANIENSOL": {
       "symbol": "ADANIENSOL",
-      "preTurnHits": 11,
-      "preTurnTotal": 27,
-      "conversionRatePct": 44,
-      "avgMfePct": 0.68,
+      "preTurnHits": 6,
+      "preTurnTotal": 18,
+      "conversionRatePct": 39,
+      "avgMfePct": 0.62,
       "reliabilityPrior": -8
     },
     "BRITANNIA": {
       "symbol": "BRITANNIA",
-      "preTurnHits": 20,
-      "preTurnTotal": 48,
-      "conversionRatePct": 44,
+      "preTurnHits": 18,
+      "preTurnTotal": 44,
+      "conversionRatePct": 43,
       "avgMfePct": 0.68,
       "reliabilityPrior": -8
     },
     "BPCL": {
       "symbol": "BPCL",
       "preTurnHits": 3,
-      "preTurnTotal": 11,
-      "conversionRatePct": 38,
-      "avgMfePct": 0.58,
+      "preTurnTotal": 10,
+      "conversionRatePct": 40,
+      "avgMfePct": 0.6,
       "reliabilityPrior": -8
     },
     "AXISBANK": {
       "symbol": "AXISBANK",
+      "preTurnHits": 10,
+      "preTurnTotal": 23,
+      "conversionRatePct": 47,
+      "avgMfePct": 0.7,
+      "reliabilityPrior": -7
+    },
+    "INDUSTOWER": {
+      "symbol": "INDUSTOWER",
+      "preTurnHits": 11,
+      "preTurnTotal": 25,
+      "conversionRatePct": 47,
+      "avgMfePct": 0.7,
+      "reliabilityPrior": -7
+    },
+    "CGPOWER": {
+      "symbol": "CGPOWER",
+      "preTurnHits": 16,
+      "preTurnTotal": 31,
+      "conversionRatePct": 53,
+      "avgMfePct": 0.75,
+      "reliabilityPrior": -5
+    },
+    "CHOLAFIN": {
+      "symbol": "CHOLAFIN",
+      "preTurnHits": 13,
+      "preTurnTotal": 30,
+      "conversionRatePct": 46,
+      "avgMfePct": 0.69,
+      "reliabilityPrior": -7
+    },
+    "BHARTIARTL": {
+      "symbol": "BHARTIARTL",
+      "preTurnHits": 22,
+      "preTurnTotal": 46,
+      "conversionRatePct": 49,
+      "avgMfePct": 0.73,
+      "reliabilityPrior": -6
+    },
+    "IRCTC": {
+      "symbol": "IRCTC",
       "preTurnHits": 10,
       "preTurnTotal": 24,
       "conversionRatePct": 45,
       "avgMfePct": 0.68,
       "reliabilityPrior": -8
     },
-    "INDUSTOWER": {
-      "symbol": "INDUSTOWER",
-      "preTurnHits": 12,
-      "preTurnTotal": 29,
-      "conversionRatePct": 44,
-      "avgMfePct": 0.68,
-      "reliabilityPrior": -8
-    },
-    "CGPOWER": {
-      "symbol": "CGPOWER",
-      "preTurnHits": 25,
-      "preTurnTotal": 47,
-      "conversionRatePct": 54,
-      "avgMfePct": 0.77,
-      "reliabilityPrior": -4
-    },
-    "CHOLAFIN": {
-      "symbol": "CHOLAFIN",
-      "preTurnHits": 14,
-      "preTurnTotal": 32,
-      "conversionRatePct": 46,
-      "avgMfePct": 0.7,
-      "reliabilityPrior": -7
-    },
-    "BHARTIARTL": {
-      "symbol": "BHARTIARTL",
-      "preTurnHits": 23,
-      "preTurnTotal": 45,
-      "conversionRatePct": 52,
-      "avgMfePct": 0.75,
-      "reliabilityPrior": -5
-    },
-    "IRCTC": {
-      "symbol": "IRCTC",
-      "preTurnHits": 12,
-      "preTurnTotal": 28,
-      "conversionRatePct": 46,
-      "avgMfePct": 0.69,
-      "reliabilityPrior": -7
-    },
     "INDIGO": {
       "symbol": "INDIGO",
-      "preTurnHits": 7,
-      "preTurnTotal": 12,
-      "conversionRatePct": 60,
-      "avgMfePct": 0.8,
-      "reliabilityPrior": -2
+      "preTurnHits": 6,
+      "preTurnTotal": 7,
+      "conversionRatePct": 79,
+      "avgMfePct": 1,
+      "reliabilityPrior": 5
     },
     "ADANIPORTS": {
       "symbol": "ADANIPORTS",
-      "preTurnHits": 29,
-      "preTurnTotal": 57,
-      "conversionRatePct": 52,
-      "avgMfePct": 0.75,
+      "preTurnHits": 22,
+      "preTurnTotal": 44,
+      "conversionRatePct": 51,
+      "avgMfePct": 0.74,
       "reliabilityPrior": -5
     },
     "GAIL": {
       "symbol": "GAIL",
-      "preTurnHits": 0,
-      "preTurnTotal": 9,
+      "preTurnHits": 1,
+      "preTurnTotal": 10,
       "conversionRatePct": 38,
-      "avgMfePct": 0.39,
+      "avgMfePct": 0.46,
       "reliabilityPrior": -8
     },
     "HAL": {
       "symbol": "HAL",
-      "preTurnHits": 11,
-      "preTurnTotal": 22,
-      "conversionRatePct": 52,
-      "avgMfePct": 0.74,
+      "preTurnHits": 8,
+      "preTurnTotal": 17,
+      "conversionRatePct": 51,
+      "avgMfePct": 0.72,
       "reliabilityPrior": -5
     },
     "CNXFINANCE": {
       "symbol": "CNXFINANCE",
       "preTurnHits": 7,
-      "preTurnTotal": 15,
-      "conversionRatePct": 51,
-      "avgMfePct": 0.72,
-      "reliabilityPrior": -5
+      "preTurnTotal": 16,
+      "conversionRatePct": 48,
+      "avgMfePct": 0.7,
+      "reliabilityPrior": -6
     },
     "FINNIFTY1!": {
       "symbol": "FINNIFTY1!",
@@ -475,107 +475,107 @@
     },
     "ADANIENT": {
       "symbol": "ADANIENT",
-      "preTurnHits": 16,
-      "preTurnTotal": 25,
-      "conversionRatePct": 64,
-      "avgMfePct": 0.84,
-      "reliabilityPrior": 0
+      "preTurnHits": 12,
+      "preTurnTotal": 16,
+      "conversionRatePct": 73,
+      "avgMfePct": 0.92,
+      "reliabilityPrior": 3
     },
     "FORTIS": {
       "symbol": "FORTIS",
-      "preTurnHits": 19,
-      "preTurnTotal": 34,
-      "conversionRatePct": 57,
+      "preTurnHits": 16,
+      "preTurnTotal": 29,
+      "conversionRatePct": 56,
       "avgMfePct": 0.78,
       "reliabilityPrior": -3
     },
     "BDL": {
       "symbol": "BDL",
-      "preTurnHits": 13,
-      "preTurnTotal": 38,
+      "preTurnHits": 7,
+      "preTurnTotal": 24,
       "conversionRatePct": 38,
-      "avgMfePct": 0.63,
+      "avgMfePct": 0.59,
       "reliabilityPrior": -8
     },
     "ABB": {
       "symbol": "ABB",
-      "preTurnHits": 12,
-      "preTurnTotal": 35,
+      "preTurnHits": 7,
+      "preTurnTotal": 23,
       "conversionRatePct": 38,
-      "avgMfePct": 0.63,
+      "avgMfePct": 0.6,
       "reliabilityPrior": -8
     },
     "HDFCLIFE": {
       "symbol": "HDFCLIFE",
       "preTurnHits": 11,
-      "preTurnTotal": 24,
-      "conversionRatePct": 49,
-      "avgMfePct": 0.71,
-      "reliabilityPrior": -6
+      "preTurnTotal": 22,
+      "conversionRatePct": 52,
+      "avgMfePct": 0.74,
+      "reliabilityPrior": -5
     },
     "HEROMOTOCO": {
       "symbol": "HEROMOTOCO",
-      "preTurnHits": 5,
-      "preTurnTotal": 12,
-      "conversionRatePct": 48,
-      "avgMfePct": 0.68,
-      "reliabilityPrior": -6
+      "preTurnHits": 4,
+      "preTurnTotal": 10,
+      "conversionRatePct": 47,
+      "avgMfePct": 0.67,
+      "reliabilityPrior": -7
     },
     "EXIDEIND": {
       "symbol": "EXIDEIND",
-      "preTurnHits": 19,
-      "preTurnTotal": 34,
-      "conversionRatePct": 57,
-      "avgMfePct": 0.78,
-      "reliabilityPrior": -3
+      "preTurnHits": 13,
+      "preTurnTotal": 22,
+      "conversionRatePct": 60,
+      "avgMfePct": 0.81,
+      "reliabilityPrior": -2
     },
     "ASHOKLEY": {
       "symbol": "ASHOKLEY",
-      "preTurnHits": 13,
-      "preTurnTotal": 32,
-      "conversionRatePct": 43,
-      "avgMfePct": 0.68,
+      "preTurnHits": 10,
+      "preTurnTotal": 25,
+      "conversionRatePct": 44,
+      "avgMfePct": 0.67,
       "reliabilityPrior": -8
     },
     "BAJFINANCE": {
       "symbol": "BAJFINANCE",
-      "preTurnHits": 7,
-      "preTurnTotal": 14,
+      "preTurnHits": 6,
+      "preTurnTotal": 12,
       "conversionRatePct": 54,
       "avgMfePct": 0.74,
       "reliabilityPrior": -4
     },
     "INFY": {
       "symbol": "INFY",
-      "preTurnHits": 24,
-      "preTurnTotal": 42,
+      "preTurnHits": 19,
+      "preTurnTotal": 33,
       "conversionRatePct": 58,
-      "avgMfePct": 0.79,
+      "avgMfePct": 0.8,
       "reliabilityPrior": -3
     },
     "BANKNIFTY": {
       "symbol": "BANKNIFTY",
-      "preTurnHits": 10,
-      "preTurnTotal": 17,
-      "conversionRatePct": 60,
-      "avgMfePct": 0.81,
-      "reliabilityPrior": -2
+      "preTurnHits": 9,
+      "preTurnTotal": 14,
+      "conversionRatePct": 65,
+      "avgMfePct": 0.84,
+      "reliabilityPrior": 0
     },
     "HDFCAMC": {
       "symbol": "HDFCAMC",
-      "preTurnHits": 3,
-      "preTurnTotal": 8,
-      "conversionRatePct": 47,
-      "avgMfePct": 0.65,
-      "reliabilityPrior": -7
+      "preTurnHits": 2,
+      "preTurnTotal": 4,
+      "conversionRatePct": 58,
+      "avgMfePct": 0.74,
+      "reliabilityPrior": -3
     },
     "ICICIPRULI": {
       "symbol": "ICICIPRULI",
-      "preTurnHits": 7,
-      "preTurnTotal": 14,
-      "conversionRatePct": 54,
-      "avgMfePct": 0.74,
-      "reliabilityPrior": -4
+      "preTurnHits": 2,
+      "preTurnTotal": 3,
+      "conversionRatePct": 66,
+      "avgMfePct": 0.86,
+      "reliabilityPrior": 0
     },
     "ANGELONE": {
       "symbol": "ANGELONE",
@@ -595,59 +595,59 @@
     },
     "BSE": {
       "symbol": "BSE",
-      "preTurnHits": 1,
-      "preTurnTotal": 2,
-      "conversionRatePct": 61,
+      "preTurnHits": 2,
+      "preTurnTotal": 4,
+      "conversionRatePct": 58,
       "avgMfePct": 0.74,
-      "reliabilityPrior": -2
+      "reliabilityPrior": -3
     },
     "ASTRAL": {
       "symbol": "ASTRAL",
-      "preTurnHits": 1,
-      "preTurnTotal": 2,
-      "conversionRatePct": 61,
+      "preTurnHits": 9,
+      "preTurnTotal": 18,
+      "conversionRatePct": 53,
       "avgMfePct": 0.74,
-      "reliabilityPrior": -2
+      "reliabilityPrior": -5
     },
     "CUMMINSIND": {
       "symbol": "CUMMINSIND",
-      "preTurnHits": 0,
-      "preTurnTotal": 1,
-      "conversionRatePct": 53,
-      "avgMfePct": 0.39,
-      "reliabilityPrior": -5
+      "preTurnHits": 8,
+      "preTurnTotal": 19,
+      "conversionRatePct": 46,
+      "avgMfePct": 0.69,
+      "reliabilityPrior": -7
     },
     "BANKINDIA": {
       "symbol": "BANKINDIA",
-      "preTurnHits": 0,
-      "preTurnTotal": 1,
-      "conversionRatePct": 53,
-      "avgMfePct": 0.39,
-      "reliabilityPrior": -5
+      "preTurnHits": 3,
+      "preTurnTotal": 6,
+      "conversionRatePct": 56,
+      "avgMfePct": 0.74,
+      "reliabilityPrior": -3
     },
     "COCHINSHIP": {
       "symbol": "COCHINSHIP",
-      "preTurnHits": 1,
-      "preTurnTotal": 2,
-      "conversionRatePct": 61,
+      "preTurnHits": 2,
+      "preTurnTotal": 4,
+      "conversionRatePct": 58,
       "avgMfePct": 0.74,
-      "reliabilityPrior": -2
+      "reliabilityPrior": -3
     },
     "CANBK": {
       "symbol": "CANBK",
       "preTurnHits": 0,
-      "preTurnTotal": 1,
-      "conversionRatePct": 53,
+      "preTurnTotal": 2,
+      "conversionRatePct": 44,
       "avgMfePct": 0.39,
-      "reliabilityPrior": -5
+      "reliabilityPrior": -8
     },
     "BAJAJFINSV": {
       "symbol": "BAJAJFINSV",
-      "preTurnHits": 0,
-      "preTurnTotal": 1,
-      "conversionRatePct": 53,
-      "avgMfePct": 0.39,
-      "reliabilityPrior": -5
+      "preTurnHits": 1,
+      "preTurnTotal": 2,
+      "conversionRatePct": 61,
+      "avgMfePct": 0.74,
+      "reliabilityPrior": -2
     },
     "ASIANPAINT": {
       "symbol": "ASIANPAINT",
@@ -681,13 +681,645 @@
       "avgMfePct": 0.39,
       "reliabilityPrior": -5
     },
-    "RELIANCE": {
-      "symbol": "RELIANCE",
-      "preTurnHits": 136,
-      "preTurnTotal": 162,
-      "conversionRatePct": 84,
-      "avgMfePct": 1.42,
-      "reliabilityPrior": 7
+    "WIPRO": {
+      "symbol": "WIPRO",
+      "preTurnHits": 7,
+      "preTurnTotal": 10,
+      "conversionRatePct": 69,
+      "avgMfePct": 0.89,
+      "reliabilityPrior": 2
+    },
+    "TECHM": {
+      "symbol": "TECHM",
+      "preTurnHits": 1,
+      "preTurnTotal": 1,
+      "conversionRatePct": 73,
+      "avgMfePct": 1.1,
+      "reliabilityPrior": 3
+    },
+    "PETRONET": {
+      "symbol": "PETRONET",
+      "preTurnHits": 3,
+      "preTurnTotal": 3,
+      "conversionRatePct": 81,
+      "avgMfePct": 1.1,
+      "reliabilityPrior": 6
+    },
+    "MPHASIS": {
+      "symbol": "MPHASIS",
+      "preTurnHits": 0,
+      "preTurnTotal": 1,
+      "conversionRatePct": 53,
+      "avgMfePct": 0.39,
+      "reliabilityPrior": -5
+    },
+    "LTM": {
+      "symbol": "LTM",
+      "preTurnHits": 1,
+      "preTurnTotal": 2,
+      "conversionRatePct": 61,
+      "avgMfePct": 0.74,
+      "reliabilityPrior": -2
+    },
+    "INDHOTEL": {
+      "symbol": "INDHOTEL",
+      "preTurnHits": 9,
+      "preTurnTotal": 20,
+      "conversionRatePct": 49,
+      "avgMfePct": 0.71,
+      "reliabilityPrior": -6
+    },
+    "MFSL": {
+      "symbol": "MFSL",
+      "preTurnHits": 4,
+      "preTurnTotal": 7,
+      "conversionRatePct": 60,
+      "avgMfePct": 0.79,
+      "reliabilityPrior": -2
+    },
+    "SAIL": {
+      "symbol": "SAIL",
+      "preTurnHits": 1,
+      "preTurnTotal": 2,
+      "conversionRatePct": 61,
+      "avgMfePct": 0.74,
+      "reliabilityPrior": -2
+    },
+    "SUZLON": {
+      "symbol": "SUZLON",
+      "preTurnHits": 0,
+      "preTurnTotal": 2,
+      "conversionRatePct": 44,
+      "avgMfePct": 0.39,
+      "reliabilityPrior": -8
+    },
+    "RECLTD": {
+      "symbol": "RECLTD",
+      "preTurnHits": 1,
+      "preTurnTotal": 3,
+      "conversionRatePct": 52,
+      "avgMfePct": 0.62,
+      "reliabilityPrior": -5
+    },
+    "VBL": {
+      "symbol": "VBL",
+      "preTurnHits": 0,
+      "preTurnTotal": 1,
+      "conversionRatePct": 53,
+      "avgMfePct": 0.39,
+      "reliabilityPrior": -5
+    },
+    "PNBHOUSING": {
+      "symbol": "PNBHOUSING",
+      "preTurnHits": 0,
+      "preTurnTotal": 3,
+      "conversionRatePct": 38,
+      "avgMfePct": 0.39,
+      "reliabilityPrior": -8
+    },
+    "LICHSGFIN": {
+      "symbol": "LICHSGFIN",
+      "preTurnHits": 1,
+      "preTurnTotal": 4,
+      "conversionRatePct": 46,
+      "avgMfePct": 0.56,
+      "reliabilityPrior": -7
+    },
+    "MUTHOOTFIN": {
+      "symbol": "MUTHOOTFIN",
+      "preTurnHits": 1,
+      "preTurnTotal": 1,
+      "conversionRatePct": 73,
+      "avgMfePct": 1.1,
+      "reliabilityPrior": 3
+    },
+    "GODFRYPHLP": {
+      "symbol": "GODFRYPHLP",
+      "preTurnHits": 1,
+      "preTurnTotal": 2,
+      "conversionRatePct": 61,
+      "avgMfePct": 0.74,
+      "reliabilityPrior": -2
+    },
+    "NMDC": {
+      "symbol": "NMDC",
+      "preTurnHits": 3,
+      "preTurnTotal": 7,
+      "conversionRatePct": 51,
+      "avgMfePct": 0.69,
+      "reliabilityPrior": -5
+    },
+    "NBCC": {
+      "symbol": "NBCC",
+      "preTurnHits": 0,
+      "preTurnTotal": 1,
+      "conversionRatePct": 53,
+      "avgMfePct": 0.39,
+      "reliabilityPrior": -5
+    },
+    "LTF": {
+      "symbol": "LTF",
+      "preTurnHits": 1,
+      "preTurnTotal": 1,
+      "conversionRatePct": 73,
+      "avgMfePct": 1.1,
+      "reliabilityPrior": 3
+    },
+    "LAURUSLABS": {
+      "symbol": "LAURUSLABS",
+      "preTurnHits": 4,
+      "preTurnTotal": 10,
+      "conversionRatePct": 47,
+      "avgMfePct": 0.67,
+      "reliabilityPrior": -7
+    },
+    "ACUTAAS": {
+      "symbol": "ACUTAAS",
+      "preTurnHits": 1,
+      "preTurnTotal": 3,
+      "conversionRatePct": 52,
+      "avgMfePct": 0.62,
+      "reliabilityPrior": -5
+    },
+    "TCS": {
+      "symbol": "TCS",
+      "preTurnHits": 3,
+      "preTurnTotal": 3,
+      "conversionRatePct": 81,
+      "avgMfePct": 1.1,
+      "reliabilityPrior": 6
+    },
+    "PERSISTENT": {
+      "symbol": "PERSISTENT",
+      "preTurnHits": 5,
+      "preTurnTotal": 11,
+      "conversionRatePct": 51,
+      "avgMfePct": 0.71,
+      "reliabilityPrior": -5
+    },
+    "KOTAKBANK": {
+      "symbol": "KOTAKBANK",
+      "preTurnHits": 9,
+      "preTurnTotal": 16,
+      "conversionRatePct": 58,
+      "avgMfePct": 0.79,
+      "reliabilityPrior": -3
+    },
+    "ULTRACEMCO": {
+      "symbol": "ULTRACEMCO",
+      "preTurnHits": 8,
+      "preTurnTotal": 13,
+      "conversionRatePct": 63,
+      "avgMfePct": 0.82,
+      "reliabilityPrior": -1
+    },
+    "CUB": {
+      "symbol": "CUB",
+      "preTurnHits": 0,
+      "preTurnTotal": 3,
+      "conversionRatePct": 38,
+      "avgMfePct": 0.39,
+      "reliabilityPrior": -8
+    },
+    "NAUKRI": {
+      "symbol": "NAUKRI",
+      "preTurnHits": 6,
+      "preTurnTotal": 10,
+      "conversionRatePct": 62,
+      "avgMfePct": 0.81,
+      "reliabilityPrior": -1
+    },
+    "SWIGGY": {
+      "symbol": "SWIGGY",
+      "preTurnHits": 9,
+      "preTurnTotal": 18,
+      "conversionRatePct": 53,
+      "avgMfePct": 0.74,
+      "reliabilityPrior": -5
+    },
+    "ICICILIFE": {
+      "symbol": "ICICILIFE",
+      "preTurnHits": 3,
+      "preTurnTotal": 6,
+      "conversionRatePct": 56,
+      "avgMfePct": 0.74,
+      "reliabilityPrior": -3
+    },
+    "MAZDOCK": {
+      "symbol": "MAZDOCK",
+      "preTurnHits": 5,
+      "preTurnTotal": 11,
+      "conversionRatePct": 51,
+      "avgMfePct": 0.71,
+      "reliabilityPrior": -5
+    },
+    "POLICYBZR": {
+      "symbol": "POLICYBZR",
+      "preTurnHits": 5,
+      "preTurnTotal": 12,
+      "conversionRatePct": 48,
+      "avgMfePct": 0.68,
+      "reliabilityPrior": -6
+    },
+    "CROMPTON": {
+      "symbol": "CROMPTON",
+      "preTurnHits": 2,
+      "preTurnTotal": 2,
+      "conversionRatePct": 77,
+      "avgMfePct": 1.1,
+      "reliabilityPrior": 5
+    },
+    "AUBANK": {
+      "symbol": "AUBANK",
+      "preTurnHits": 2,
+      "preTurnTotal": 4,
+      "conversionRatePct": 58,
+      "avgMfePct": 0.74,
+      "reliabilityPrior": -3
+    },
+    "YESBANK": {
+      "symbol": "YESBANK",
+      "preTurnHits": 6,
+      "preTurnTotal": 8,
+      "conversionRatePct": 72,
+      "avgMfePct": 0.92,
+      "reliabilityPrior": 3
+    },
+    "VMM": {
+      "symbol": "VMM",
+      "preTurnHits": 3,
+      "preTurnTotal": 3,
+      "conversionRatePct": 81,
+      "avgMfePct": 1.1,
+      "reliabilityPrior": 6
+    },
+    "SHRIRAMFIN": {
+      "symbol": "SHRIRAMFIN",
+      "preTurnHits": 1,
+      "preTurnTotal": 1,
+      "conversionRatePct": 73,
+      "avgMfePct": 1.1,
+      "reliabilityPrior": 3
+    },
+    "PNB": {
+      "symbol": "PNB",
+      "preTurnHits": 9,
+      "preTurnTotal": 15,
+      "conversionRatePct": 61,
+      "avgMfePct": 0.81,
+      "reliabilityPrior": -2
+    },
+    "PHOENIXLTD": {
+      "symbol": "PHOENIXLTD",
+      "preTurnHits": 7,
+      "preTurnTotal": 13,
+      "conversionRatePct": 57,
+      "avgMfePct": 0.77,
+      "reliabilityPrior": -3
+    },
+    "SAGILITY": {
+      "symbol": "SAGILITY",
+      "preTurnHits": 1,
+      "preTurnTotal": 4,
+      "conversionRatePct": 46,
+      "avgMfePct": 0.56,
+      "reliabilityPrior": -7
+    },
+    "INDIANB": {
+      "symbol": "INDIANB",
+      "preTurnHits": 5,
+      "preTurnTotal": 9,
+      "conversionRatePct": 59,
+      "avgMfePct": 0.78,
+      "reliabilityPrior": -2
+    },
+    "SOLARINDS": {
+      "symbol": "SOLARINDS",
+      "preTurnHits": 3,
+      "preTurnTotal": 8,
+      "conversionRatePct": 47,
+      "avgMfePct": 0.65,
+      "reliabilityPrior": -7
+    },
+    "PIIND": {
+      "symbol": "PIIND",
+      "preTurnHits": 11,
+      "preTurnTotal": 21,
+      "conversionRatePct": 55,
+      "avgMfePct": 0.76,
+      "reliabilityPrior": -4
+    },
+    "SYRMA": {
+      "symbol": "SYRMA",
+      "preTurnHits": 5,
+      "preTurnTotal": 8,
+      "conversionRatePct": 64,
+      "avgMfePct": 0.83,
+      "reliabilityPrior": 0
+    },
+    "COALINDIA": {
+      "symbol": "COALINDIA",
+      "preTurnHits": 4,
+      "preTurnTotal": 8,
+      "conversionRatePct": 55,
+      "avgMfePct": 0.74,
+      "reliabilityPrior": -4
+    },
+    "UJJIVANSFB": {
+      "symbol": "UJJIVANSFB",
+      "preTurnHits": 0,
+      "preTurnTotal": 1,
+      "conversionRatePct": 53,
+      "avgMfePct": 0.39,
+      "reliabilityPrior": -5
+    },
+    "SUPREMEIND": {
+      "symbol": "SUPREMEIND",
+      "preTurnHits": 2,
+      "preTurnTotal": 6,
+      "conversionRatePct": 46,
+      "avgMfePct": 0.62,
+      "reliabilityPrior": -7
+    },
+    "APARINDS": {
+      "symbol": "APARINDS",
+      "preTurnHits": 5,
+      "preTurnTotal": 13,
+      "conversionRatePct": 45,
+      "avgMfePct": 0.66,
+      "reliabilityPrior": -8
+    },
+    "DATAPATTNS": {
+      "symbol": "DATAPATTNS",
+      "preTurnHits": 0,
+      "preTurnTotal": 1,
+      "conversionRatePct": 53,
+      "avgMfePct": 0.39,
+      "reliabilityPrior": -5
+    },
+    "KEI": {
+      "symbol": "KEI",
+      "preTurnHits": 2,
+      "preTurnTotal": 5,
+      "conversionRatePct": 52,
+      "avgMfePct": 0.67,
+      "reliabilityPrior": -5
+    },
+    "BHARATFORG": {
+      "symbol": "BHARATFORG",
+      "preTurnHits": 5,
+      "preTurnTotal": 13,
+      "conversionRatePct": 45,
+      "avgMfePct": 0.66,
+      "reliabilityPrior": -8
+    },
+    "SHREECEM": {
+      "symbol": "SHREECEM",
+      "preTurnHits": 3,
+      "preTurnTotal": 6,
+      "conversionRatePct": 56,
+      "avgMfePct": 0.74,
+      "reliabilityPrior": -3
+    },
+    "UNIONBANK": {
+      "symbol": "UNIONBANK",
+      "preTurnHits": 4,
+      "preTurnTotal": 10,
+      "conversionRatePct": 47,
+      "avgMfePct": 0.67,
+      "reliabilityPrior": -7
+    },
+    "M&M": {
+      "symbol": "M&M",
+      "preTurnHits": 3,
+      "preTurnTotal": 10,
+      "conversionRatePct": 40,
+      "avgMfePct": 0.6,
+      "reliabilityPrior": -8
+    },
+    "POWERINDIA": {
+      "symbol": "POWERINDIA",
+      "preTurnHits": 1,
+      "preTurnTotal": 1,
+      "conversionRatePct": 73,
+      "avgMfePct": 1.1,
+      "reliabilityPrior": 3
+    },
+    "NIFTY": {
+      "symbol": "NIFTY",
+      "preTurnHits": 3,
+      "preTurnTotal": 6,
+      "conversionRatePct": 56,
+      "avgMfePct": 0.74,
+      "reliabilityPrior": -3
+    },
+    "AMBER": {
+      "symbol": "AMBER",
+      "preTurnHits": 2,
+      "preTurnTotal": 2,
+      "conversionRatePct": 77,
+      "avgMfePct": 1.1,
+      "reliabilityPrior": 5
+    },
+    "PAGEIND": {
+      "symbol": "PAGEIND",
+      "preTurnHits": 7,
+      "preTurnTotal": 12,
+      "conversionRatePct": 60,
+      "avgMfePct": 0.8,
+      "reliabilityPrior": -2
+    },
+    "OIL": {
+      "symbol": "OIL",
+      "preTurnHits": 3,
+      "preTurnTotal": 5,
+      "conversionRatePct": 63,
+      "avgMfePct": 0.81,
+      "reliabilityPrior": -1
+    },
+    "JSWSTEEL": {
+      "symbol": "JSWSTEEL",
+      "preTurnHits": 1,
+      "preTurnTotal": 1,
+      "conversionRatePct": 73,
+      "avgMfePct": 1.1,
+      "reliabilityPrior": 3
+    },
+    "LUPIN": {
+      "symbol": "LUPIN",
+      "preTurnHits": 1,
+      "preTurnTotal": 1,
+      "conversionRatePct": 73,
+      "avgMfePct": 1.1,
+      "reliabilityPrior": 3
+    },
+    "OFSS": {
+      "symbol": "OFSS",
+      "preTurnHits": 2,
+      "preTurnTotal": 7,
+      "conversionRatePct": 42,
+      "avgMfePct": 0.59,
+      "reliabilityPrior": -8
+    },
+    "TORNTPHARM": {
+      "symbol": "TORNTPHARM",
+      "preTurnHits": 0,
+      "preTurnTotal": 1,
+      "conversionRatePct": 53,
+      "avgMfePct": 0.39,
+      "reliabilityPrior": -5
+    },
+    "TATACONSUM": {
+      "symbol": "TATACONSUM",
+      "preTurnHits": 2,
+      "preTurnTotal": 3,
+      "conversionRatePct": 66,
+      "avgMfePct": 0.86,
+      "reliabilityPrior": 0
+    },
+    "SBIN": {
+      "symbol": "SBIN",
+      "preTurnHits": 4,
+      "preTurnTotal": 5,
+      "conversionRatePct": 74,
+      "avgMfePct": 0.96,
+      "reliabilityPrior": 3
+    },
+    "PAYTM": {
+      "symbol": "PAYTM",
+      "preTurnHits": 1,
+      "preTurnTotal": 1,
+      "conversionRatePct": 73,
+      "avgMfePct": 1.1,
+      "reliabilityPrior": 3
+    },
+    "PREMIERENE": {
+      "symbol": "PREMIERENE",
+      "preTurnHits": 3,
+      "preTurnTotal": 6,
+      "conversionRatePct": 56,
+      "avgMfePct": 0.74,
+      "reliabilityPrior": -3
+    },
+    "ANANDRATHI": {
+      "symbol": "ANANDRATHI",
+      "preTurnHits": 2,
+      "preTurnTotal": 2,
+      "conversionRatePct": 77,
+      "avgMfePct": 1.1,
+      "reliabilityPrior": 5
+    },
+    "MARICO": {
+      "symbol": "MARICO",
+      "preTurnHits": 0,
+      "preTurnTotal": 1,
+      "conversionRatePct": 53,
+      "avgMfePct": 0.39,
+      "reliabilityPrior": -5
+    },
+    "MAXHEALTH": {
+      "symbol": "MAXHEALTH",
+      "preTurnHits": 2,
+      "preTurnTotal": 3,
+      "conversionRatePct": 66,
+      "avgMfePct": 0.86,
+      "reliabilityPrior": 0
+    },
+    "MAHABANK": {
+      "symbol": "MAHABANK",
+      "preTurnHits": 3,
+      "preTurnTotal": 3,
+      "conversionRatePct": 81,
+      "avgMfePct": 1.1,
+      "reliabilityPrior": 6
+    },
+    "KAYNES": {
+      "symbol": "KAYNES",
+      "preTurnHits": 0,
+      "preTurnTotal": 1,
+      "conversionRatePct": 53,
+      "avgMfePct": 0.39,
+      "reliabilityPrior": -5
+    },
+    "ITC": {
+      "symbol": "ITC",
+      "preTurnHits": 1,
+      "preTurnTotal": 1,
+      "conversionRatePct": 73,
+      "avgMfePct": 1.1,
+      "reliabilityPrior": 3
+    },
+    "NAVINFLUOR": {
+      "symbol": "NAVINFLUOR",
+      "preTurnHits": 1,
+      "preTurnTotal": 3,
+      "conversionRatePct": 52,
+      "avgMfePct": 0.62,
+      "reliabilityPrior": -5
+    },
+    "POLYCAB": {
+      "symbol": "POLYCAB",
+      "preTurnHits": 1,
+      "preTurnTotal": 3,
+      "conversionRatePct": 52,
+      "avgMfePct": 0.62,
+      "reliabilityPrior": -5
+    },
+    "FORCEMOT": {
+      "symbol": "FORCEMOT",
+      "preTurnHits": 0,
+      "preTurnTotal": 3,
+      "conversionRatePct": 38,
+      "avgMfePct": 0.39,
+      "reliabilityPrior": -8
+    },
+    "MARUTI": {
+      "symbol": "MARUTI",
+      "preTurnHits": 1,
+      "preTurnTotal": 2,
+      "conversionRatePct": 61,
+      "avgMfePct": 0.74,
+      "reliabilityPrior": -2
+    },
+    "UPL": {
+      "symbol": "UPL",
+      "preTurnHits": 1,
+      "preTurnTotal": 1,
+      "conversionRatePct": 73,
+      "avgMfePct": 1.1,
+      "reliabilityPrior": 3
+    },
+    "MANAPPURAM": {
+      "symbol": "MANAPPURAM",
+      "preTurnHits": 3,
+      "preTurnTotal": 3,
+      "conversionRatePct": 81,
+      "avgMfePct": 1.1,
+      "reliabilityPrior": 6
+    },
+    "ATHERENERG": {
+      "symbol": "ATHERENERG",
+      "preTurnHits": 0,
+      "preTurnTotal": 1,
+      "conversionRatePct": 53,
+      "avgMfePct": 0.39,
+      "reliabilityPrior": -5
+    },
+    "TRENT": {
+      "symbol": "TRENT",
+      "preTurnHits": 1,
+      "preTurnTotal": 1,
+      "conversionRatePct": 73,
+      "avgMfePct": 1.1,
+      "reliabilityPrior": 3
+    },
+    "TATAPOWER": {
+      "symbol": "TATAPOWER",
+      "preTurnHits": 1,
+      "preTurnTotal": 1,
+      "conversionRatePct": 73,
+      "avgMfePct": 1.1,
+      "reliabilityPrior": 3
     }
   }
 }

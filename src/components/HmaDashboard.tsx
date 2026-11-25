@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { 
   ExternalLink, 
   Search, 
@@ -14,6 +14,7 @@ import { Timeframe } from "../types.js";
 import { FNO_SYMBOLS_LIST, NIFTY_500_SYMBOLS_LIST } from "../data/watchlists.js";
 import { computeLayaPreTurnIntel } from "../lib/laya-engine.js";
 import { LayaIntelCell } from "./LayaIntelCell.js";
+import { fetchWtDashboardTwoPhase } from "../lib/safe-fetch.js";
 
 interface HmaTimeframeData {
   hmaOpen: number;
@@ -67,6 +68,7 @@ export default function HmaDashboard({ personalSymbols }: HmaDashboardProps) {
 
   // View Mode state (High Timeframe is default!)
   const [viewMode, setViewMode] = useState<"current" | "high">("current");
+  const fetchAbortRef = useRef<AbortController | null>(null);
 
   // Get TradingView URL (matched to App.tsx custom mapping)
   const getTradingViewUrl = (symbol: string) => {
@@ -105,8 +107,14 @@ export default function HmaDashboard({ personalSymbols }: HmaDashboardProps) {
     return list;
   };
 
-  // Fetch HMA (via wt-dashboard API) data
+  // Fetch HMA (via wt-dashboard API) data using fast 2-phase parallel waves
   const fetchHmaData = async () => {
+    if (fetchAbortRef.current) {
+      fetchAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    fetchAbortRef.current = controller;
+
     setIsLoading(true);
     setErrorMessage(null);
     try {
@@ -116,38 +124,35 @@ export default function HmaDashboard({ personalSymbols }: HmaDashboardProps) {
         setIsLoading(false);
         return;
       }
-      
-      const chunkCount = 35;
-      const chunks: string[][] = [];
-      for (let i = 0; i < masterSymbols.length; i += chunkCount) {
-        chunks.push(masterSymbols.slice(i, i + chunkCount));
-      }
-      
-      const allFetchedData: HmaSymbolRow[] = [];
-      for (const chunk of chunks) {
-        const symbolsQuery = chunk.join(",");
-        const response = await fetch(`/api/wt-dashboard?symbols=${encodeURIComponent(symbolsQuery)}`);
-        if (!response.ok) {
-          throw new Error(`Pipeline API error (Status: ${response.status})`);
-        }
-        const json = await response.json();
-        if (json.status === "ok" && Array.isArray(json.data)) {
-          allFetchedData.push(...json.data);
-        }
-      }
-      
-      setSymbolsData(allFetchedData);
+
+      await fetchWtDashboardTwoPhase({
+        symbols: masterSymbols,
+        signal: controller.signal,
+        onRowsUpdate: (rows, meta) => {
+          setSymbolsData(rows as HmaSymbolRow[]);
+          if (meta?.isFirstChunk) setIsLoading(false);
+        },
+        onPhase1Done: () => setIsLoading(false),
+      });
     } catch (err: any) {
+      if (err?.name === "AbortError") return;
       console.error("Error fetching HMA dashboard data:", err);
       setErrorMessage(err.message || "Failed to load symbols metric data.");
     } finally {
-      setIsLoading(false);
+      if (!controller.signal.aborted) {
+        setIsLoading(false);
+      }
     }
   };
 
   useEffect(() => {
     fetchHmaData();
     setCurrentPage(1);
+    return () => {
+      if (fetchAbortRef.current) {
+        fetchAbortRef.current.abort();
+      }
+    };
   }, [activeWatchlist, personalSymbols]);
 
   const handleSort = (field: string) => {
@@ -529,7 +534,7 @@ export default function HmaDashboard({ personalSymbols }: HmaDashboardProps) {
 
       {/* Main Board Table */}
       <div className="bg-[#0d0e12] border border-[#2a2d32] rounded-2xl shadow-2xl overflow-hidden">
-        {isLoading ? (
+        {isLoading && symbolsData.length === 0 ? (
           <div className="py-24 text-center">
             <RefreshCw className="h-10 w-10 text-orange-500 animate-spin mx-auto mb-4" />
             <p className="text-[#8e9299] font-sans text-sm animate-pulse font-bold">

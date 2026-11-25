@@ -28,6 +28,7 @@ import {
   LayaSelfLearnedState,
 } from "../lib/laya-engine.js";
 import { LayaIntelCell } from "./LayaIntelCell.js";
+import { safeParseJson } from "../lib/safe-fetch.js";
 
 interface D5VirtualizedDashboardProps {
   personalSymbols: string[];
@@ -165,11 +166,7 @@ export default function D5VirtualizedDashboard({
   useEffect(() => {
     let active = true;
     fetch("/api/nse/market-movers?index=NIFTY%20500&limit=30")
-      .then(async (r) => {
-        const ct = r.headers.get("content-type") || "";
-        if (!r.ok || !ct.includes("application/json")) return null;
-        return r.json();
-      })
+      .then((r) => safeParseJson<any>(r))
       .then((json) => {
         if (!active || json?.status !== "ok" || !json.data) return;
         const g = new Set<string>(
@@ -245,38 +242,90 @@ export default function D5VirtualizedDashboard({
     }
 
     try {
-      // Stream in chunks of 50 symbols so table virtualization mounts immediately on first chunk
-      // and progressively hydrates up to all 500 symbols without blocking UI
+      // Fast 2-Phase Parallel Streaming:
+      // Phase 1 loads NSE MCP cached 1D,3D,1W across parallel waves (concurrency 4) so the matrix renders in ~1-2s.
+      // Phase 2 progressively hydrates all 8 timeframes in background waves (concurrency 2).
       const chunkSize = 50;
-      const accumulated: any[] = [];
-
+      const chunks: string[][] = [];
       for (let i = 0; i < masterList.length; i += chunkSize) {
+        chunks.push(masterList.slice(i, i + chunkSize));
+      }
+
+      const mergedMap = new Map<string, any>();
+      const emitRows = () => {
         if (controller.signal.aborted) return;
-        const slice = masterList.slice(i, i + chunkSize);
-        const response = await fetch(
-          `/api/wt-dashboard?symbols=${encodeURIComponent(slice.join(","))}`,
-          { signal: controller.signal }
-        );
-        const ct = response.headers.get("content-type") || "";
-        if (!response.ok || !ct.includes("application/json")) {
-          throw new Error(`HTTP error ${response.status}`);
+        const ordered: any[] = [];
+        for (const sym of masterList) {
+          const row = mergedMap.get(sym);
+          if (row) ordered.push(row);
         }
-        const json = await response.json();
-        if (json.status === "ok" && Array.isArray(json.data)) {
-          accumulated.push(...json.data);
-          setSymbolsData([...accumulated]);
-          setLoadedCount(accumulated.length);
-          if (json.vectorTelemetry) {
-            setServerVectorTelemetry(json.vectorTelemetry);
-          }
-          if (json.layaLearnedState) {
-            setGlobalLayaLearnedState(json.layaLearnedState);
-          }
-          // Release initial loading spinner after first batch so user can scroll immediately
-          if (i === 0) {
-            setIsLoading(false);
+        setSymbolsData(ordered);
+        setLoadedCount(ordered.length);
+      };
+
+      const mergeRows = (rows: any[]) => {
+        for (const row of rows) {
+          if (!row?.Symbol) continue;
+          const prev = mergedMap.get(row.Symbol);
+          if (prev) {
+            mergedMap.set(row.Symbol, {
+              ...prev,
+              ...row,
+              timeframes: {
+                ...(prev.timeframes || {}),
+                ...(row.timeframes || {}),
+              },
+            });
+          } else {
+            mergedMap.set(row.Symbol, row);
           }
         }
+      };
+
+      const runWave = async (
+        tfParam: string | null,
+        concurrency: number,
+        releaseSpinnerOnFirst: boolean
+      ) => {
+        let cursor = 0;
+        let firstReleased = false;
+        const worker = async () => {
+          while (cursor < chunks.length && !controller.signal.aborted) {
+            const idx = cursor++;
+            const slice = chunks[idx];
+            const url = tfParam
+              ? `/api/wt-dashboard?symbols=${encodeURIComponent(slice.join(","))}&timeframes=${encodeURIComponent(tfParam)}`
+              : `/api/wt-dashboard?symbols=${encodeURIComponent(slice.join(","))}`;
+            try {
+              const response = await fetch(url, { signal: controller.signal });
+              const json = await safeParseJson<any>(response);
+              if (controller.signal.aborted) return;
+              if (json?.status === "ok" && Array.isArray(json.data)) {
+                mergeRows(json.data);
+                emitRows();
+                if (json.vectorTelemetry) {
+                  setServerVectorTelemetry(json.vectorTelemetry);
+                }
+                if (json.layaLearnedState) {
+                  setGlobalLayaLearnedState(json.layaLearnedState);
+                }
+                if (releaseSpinnerOnFirst && !firstReleased) {
+                  firstReleased = true;
+                  setIsLoading(false);
+                }
+              }
+            } catch (e: any) {
+              if (e?.name === "AbortError") return;
+            }
+          }
+        };
+        await Promise.all(Array.from({ length: Math.min(concurrency, chunks.length) }, () => worker()));
+      };
+
+      await runWave("1D,3D,1W", 4, true);
+      if (!controller.signal.aborted) {
+        setIsLoading(false);
+        runWave(null, 2, false).catch(() => {});
       }
     } catch (err: any) {
       if (err?.name === "AbortError") return;
@@ -307,10 +356,9 @@ export default function D5VirtualizedDashboard({
       const res = await fetch(
         `/api/live-quotes?symbols=${encodeURIComponent(sampleSymbols.join(","))}`
       );
-      const ct = res.headers.get("content-type") || "";
-      if (res.ok && ct.includes("application/json")) {
-        const json = await res.json();
-        const quotes: Record<string, number> = json.quotes || {};
+      const json = await safeParseJson<any>(res);
+      if (json) {
+        const quotes: Record<string, number> = json.quotes || json.data || {};
         let totalMicros = 0;
         let updatedCount = 0;
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { 
   ExternalLink, 
   Search, 
@@ -18,6 +18,7 @@ import { Timeframe } from "../types.js";
 import { FNO_SYMBOLS_LIST, NIFTY_500_SYMBOLS_LIST } from "../data/watchlists.js";
 import { computeLayaPreTurnIntel } from "../lib/laya-engine.js";
 import { LayaIntelCell } from "./LayaIntelCell.js";
+import { fetchWtDashboardTwoPhase } from "../lib/safe-fetch.js";
 
 interface ScreenerTimeframeData {
   screenerCb: boolean;
@@ -79,6 +80,7 @@ export default function ScreenerD7({ personalSymbols }: ScreenerD7Props) {
   // Pagination states
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(250);
+  const fetchAbortRef = useRef<AbortController | null>(null);
 
   // Get TradingView URL
   const getTradingViewUrl = (symbol: string) => {
@@ -126,6 +128,12 @@ export default function ScreenerD7({ personalSymbols }: ScreenerD7Props) {
   };
 
   const fetchScreenerData = async () => {
+    if (fetchAbortRef.current) {
+      fetchAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    fetchAbortRef.current = controller;
+
     setIsLoading(true);
     setErrorMessage(null);
     const targets = getTargetSymbols();
@@ -137,35 +145,39 @@ export default function ScreenerD7({ personalSymbols }: ScreenerD7Props) {
     }
 
     try {
-      const symbolsQuery = targets.join(",");
-      const response = await fetch(`/api/wt-dashboard?symbols=${encodeURIComponent(symbolsQuery)}`);
-      
-      if (!response.ok) {
-        throw new Error(`HTTP fetch error ${response.status}`);
-      }
-
-      const resJson = await response.json();
-      if (resJson.status === "ok" && Array.isArray(resJson.data)) {
-        setSymbolsData(resJson.data);
-        setLastRefreshed(new Date());
-      } else {
-        throw new Error(resJson.message || "Invalid data payload returned by server");
-      }
+      await fetchWtDashboardTwoPhase({
+        symbols: targets,
+        signal: controller.signal,
+        onRowsUpdate: (rows, meta) => {
+          setSymbolsData(rows as ScreenerSymbolRow[]);
+          setLastRefreshed(new Date());
+          if (meta?.isFirstChunk) setIsLoading(false);
+        },
+        onPhase1Done: () => setIsLoading(false),
+      });
     } catch (error: any) {
+      if (error?.name === "AbortError") return;
       console.error("Error fetching D7 Screener data:", error);
       setErrorMessage(error.message || "Failed loading live Screener indicator dataset.");
     } finally {
-      setIsLoading(false);
+      if (!controller.signal.aborted) {
+        setIsLoading(false);
+      }
     }
   };
 
-  // Auto refresh every 30 seconds to behave as "real-time" with paginated parameters
+  // Auto refresh every 60 seconds to behave as "real-time" with paginated parameters
   useEffect(() => {
     fetchScreenerData();
     const interval = setInterval(() => {
       fetchScreenerData();
-    }, 30000);
-    return () => clearInterval(interval);
+    }, 60000);
+    return () => {
+      clearInterval(interval);
+      if (fetchAbortRef.current) {
+        fetchAbortRef.current.abort();
+      }
+    };
   }, [activeWatchlist, personalSymbols.length, searchQuery, displayPage, pageSize]);
 
   // Reset page to 1 when watchlist or search changes
@@ -951,7 +963,7 @@ export default function ScreenerD7({ personalSymbols }: ScreenerD7Props) {
               </tr>
             </thead>
             <tbody className="divide-y divide-[#1f2229]/50">
-              {isLoading ? (
+              {isLoading && symbolsData.length === 0 ? (
                 <tr>
                   <td colSpan={11} className="p-12 text-center text-zinc-500 font-mono text-xs">
                     <RefreshCw className="h-6 w-6 animate-spin mx-auto text-orange-500 mb-2" />

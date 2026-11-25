@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { ArrowUpRight, ArrowDownRight, RefreshCw, SlidersHorizontal, Settings2, ArrowDownUp, ExternalLink } from 'lucide-react';
 import type { Timeframe } from '../types';
 import { FNO_SYMBOLS_LIST, NIFTY_500_SYMBOLS_LIST } from '../data/watchlists';
 import { computeLayaPreTurnIntel } from '../lib/laya-engine';
 import { LayaIntelCell } from './LayaIntelCell';
+import { fetchWtDashboardTwoPhase } from '../lib/safe-fetch';
 
 type IndicatorType = "NONE" | "HMA" | "ST" | "WT" | "TSI";
 type ModeType = "CTF" | "HTF1";
@@ -85,8 +86,15 @@ export function D8Screener({ personalSymbols = [] }: { personalSymbols?: string[
 
   const [activeSetups, setActiveSetups] = useState<ColumnSetup[]>([]);
   const [visibleRows, setVisibleRows] = useState<number>(3);
+  const fetchAbortRef = useRef<AbortController | null>(null);
 
   const fetchData = async () => {
+    if (fetchAbortRef.current) {
+      fetchAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    fetchAbortRef.current = controller;
+
     setLoading(true);
     setError(null);
     try {
@@ -107,24 +115,23 @@ export function D8Screener({ personalSymbols = [] }: { personalSymbols?: string[
         return;
       }
 
-      const chunkSize = 50;
-      let allData: SymbolRow[] = [];
-      
-      for (let i = 0; i < targetList.length; i += chunkSize) {
-        const chunk = targetList.slice(i, i + chunkSize);
-        const res = await fetch(`/api/wt-dashboard?engine=quant_swt&symbols=${encodeURIComponent(chunk.join(","))}`);
-        if (!res.ok) throw new Error("Failed to fetch data");
-        const json = await res.json();
-        if (json.data) {
-          allData = [...allData, ...json.data];
-        }
-      }
-      
-      setData(allData);
+      await fetchWtDashboardTwoPhase({
+        symbols: targetList,
+        signal: controller.signal,
+        engine: "quant_swt",
+        onRowsUpdate: (rows, meta) => {
+          setData(rows as SymbolRow[]);
+          if (meta?.isFirstChunk) setLoading(false);
+        },
+        onPhase1Done: () => setLoading(false),
+      });
     } catch (err: any) {
+      if (err?.name === "AbortError") return;
       setError(err.message);
     } finally {
-      setLoading(false);
+      if (!controller.signal.aborted) {
+        setLoading(false);
+      }
     }
   };
 
@@ -137,8 +144,13 @@ export function D8Screener({ personalSymbols = [] }: { personalSymbols?: string[
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 60000);
-    return () => clearInterval(interval);
+    const interval = setInterval(fetchData, 90000);
+    return () => {
+      clearInterval(interval);
+      if (fetchAbortRef.current) {
+        fetchAbortRef.current.abort();
+      }
+    };
   }, [watchlistFilter]);
 
   const runScan = () => {

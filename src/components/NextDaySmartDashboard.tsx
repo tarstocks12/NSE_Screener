@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   ArrowUpRight,
   ArrowDownRight,
@@ -10,7 +10,8 @@ import {
   Search,
   Sliders,
   CheckCircle2,
-  ShieldAlert
+  ShieldAlert,
+  History
 } from 'lucide-react';
 import { Timeframe } from '../types';
 import { FNO_SYMBOLS_LIST, NIFTY_500_SYMBOLS_LIST } from '../data/watchlists';
@@ -25,28 +26,36 @@ import {
   setGlobalLayaLearnedState,
 } from '../lib/laya-engine';
 import { LayaIntelCell } from './LayaIntelCell';
-import { VERIFIED_AUDIT_BASELINE } from '../data/verified-audit-baseline';
 import { mergeVerifiedAuditLogs, HistoricalAuditDayEntry } from '../lib/walk-forward-audit';
+import {
+  extractClosedAuditLogs,
+  computeDisconnectStreaksAtOffset,
+} from '../lib/disconnect-streaks';
+import { safeParseJson } from '../lib/safe-fetch';
 
-const AUDIT_VAULT_STORAGE_KEY = "quant_swt_verified_audit_vault_v3";
+const AUDIT_VAULT_STORAGE_KEY_PREFIX = "quant_swt_verified_audit_vault_v5_";
 
-function loadClientAuditVault(): HistoricalAuditDayEntry[] {
+function getAuditVaultKey(universe: string): string {
+  return `${AUDIT_VAULT_STORAGE_KEY_PREFIX}${universe || "FNO"}`;
+}
+
+function loadClientAuditVault(universe: string): HistoricalAuditDayEntry[] {
   try {
-    const raw = localStorage.getItem(AUDIT_VAULT_STORAGE_KEY);
+    const raw = localStorage.getItem(getAuditVaultKey(universe));
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
-        return mergeVerifiedAuditLogs(VERIFIED_AUDIT_BASELINE, parsed);
+        return mergeVerifiedAuditLogs(parsed);
       }
     }
   } catch {}
-  return [...VERIFIED_AUDIT_BASELINE];
+  return [];
 }
 
-function saveClientAuditVault(entries: HistoricalAuditDayEntry[]) {
+function saveClientAuditVault(universe: string, entries: HistoricalAuditDayEntry[]) {
   try {
-    const merged = mergeVerifiedAuditLogs(VERIFIED_AUDIT_BASELINE, entries);
-    localStorage.setItem(AUDIT_VAULT_STORAGE_KEY, JSON.stringify(merged));
+    const merged = mergeVerifiedAuditLogs(entries);
+    localStorage.setItem(getAuditVaultKey(universe), JSON.stringify(merged));
     return merged;
   } catch {
     return entries;
@@ -95,7 +104,7 @@ export default function NextDaySmartDashboard({ personalSymbols = [] }: { person
   const [layaBatchLatencyMs, setLayaBatchLatencyMs] = useState<number>(0);
 
   const [auditLogs, setAuditLogs] = useState<HistoricalAuditDayEntry[]>(() => {
-    const vault = loadClientAuditVault();
+    const vault = loadClientAuditVault("FNO");
     return [...vault].reverse();
   });
   const [selectedAuditIdx, setSelectedAuditIdx] = useState<number>(0);
@@ -118,15 +127,14 @@ export default function NextDaySmartDashboard({ personalSymbols = [] }: { person
 
   const [auditSearchSymbol, setAuditSearchSymbol] = useState("");
   const [minStreakDays, setMinStreakDays] = useState<number>(2);
+  const [historyDayOffset, setHistoryDayOffset] = useState<number>(1);
+  const [histMinStreakDays, setHistMinStreakDays] = useState<number>(2);
+  const fetchAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     let active = true;
     fetch("/api/nse/market-movers?index=NIFTY%20500&limit=30")
-      .then(async (r) => {
-        const ct = r.headers.get("content-type") || "";
-        if (!r.ok || !ct.includes("application/json")) return null;
-        return r.json();
-      })
+      .then((r) => safeParseJson<any>(r))
       .then((json) => {
         if (!active || json?.status !== "ok" || !json.data) return;
         setNseMovers({
@@ -178,79 +186,72 @@ export default function NextDaySmartDashboard({ personalSymbols = [] }: { person
     };
   }, [filteredAuditLogs]);
 
-  const streakData = useMemo(() => {
-    if (!filteredAuditLogs || filteredAuditLogs.length === 0) return [];
-
-    const effectiveMinDays = Math.max(2, minStreakDays);
-    const activeSymbols = new Set<string>();
-
+  const activeUniverseSet = useMemo(() => {
+    const set = new Set<string>(
+      watchlistFilter === "Personal"
+        ? personalSymbols
+        : watchlistFilter === "Nifty500"
+        ? NIFTY_500_SYMBOLS_LIST
+        : FNO_SYMBOLS_LIST
+    );
     if (data && data.length > 0) {
-      data.forEach(d => activeSymbols.add(d.Symbol));
-    } else {
-      filteredAuditLogs.forEach(log => {
-        log.bullishPicks?.forEach((p: any) => activeSymbols.add(p.symbol));
-        log.bearishPicks?.forEach((p: any) => activeSymbols.add(p.symbol));
+      data.forEach((d) => {
+        if (d?.Symbol) set.add(d.Symbol);
       });
     }
+    return set;
+  }, [data, watchlistFilter, personalSymbols]);
 
-    const results: any[] = [];
+  const closedAuditLogs = useMemo(
+    () => extractClosedAuditLogs(filteredAuditLogs),
+    [filteredAuditLogs]
+  );
 
-    activeSymbols.forEach(sym => {
-      let curStreak = 0;
-      let curType = "";
-      let curPnlSum = 0;
+  const currentStreakResult = useMemo(
+    () =>
+      computeDisconnectStreaksAtOffset(
+        closedAuditLogs,
+        0,
+        minStreakDays,
+        activeUniverseSet,
+        "BULL",
+        "BEAR"
+      ),
+    [closedAuditLogs, minStreakDays, activeUniverseSet]
+  );
+  const streakData = currentStreakResult.streaks;
 
-      // Strictly evaluate active consecutive trading days starting from the most recent session (i = 0).
-      // Do NOT skip non-disconnect days with `continue` to surface old streaks from weeks/months ago.
-      for (let i = 0; i < filteredAuditLogs.length; i++) {
-        const log = filteredAuditLogs[i];
-        const bullPick = log.bullishPicks?.find((p: any) => p.symbol === sym);
-        const bearPick = log.bearishPicks?.find((p: any) => p.symbol === sym);
+  const previousDayOptions = useMemo(() => {
+    const maxOffset = Math.min(10, Math.max(0, closedAuditLogs.length - 1));
+    const opts: Array<{ offset: number; date: string; label: string }> = [];
+    for (let offset = 1; offset <= maxOffset; offset++) {
+      const date = closedAuditLogs[offset].date;
+      const label =
+        offset === 1
+          ? `Previous Day · ${date}`
+          : `${offset} Days Ago · ${date}`;
+      opts.push({ offset, date, label });
+    }
+    return opts;
+  }, [closedAuditLogs]);
 
-        // Require a single unambiguous prediction direction on this trading day
-        const pick = bullPick && !bearPick ? bullPick : bearPick && !bullPick ? bearPick : null;
-        const type = bullPick && !bearPick ? "BULL" : bearPick && !bullPick ? "BEAR" : "";
+  const effectiveHistoryOffset = useMemo(() => {
+    if (previousDayOptions.length === 0) return 1;
+    return Math.min(historyDayOffset, previousDayOptions[previousDayOptions.length - 1].offset);
+  }, [historyDayOffset, previousDayOptions]);
 
-        // Must be a genuine opposite-market outcome:
-        // - Predicted BULL, but actual market was BEAR (actualOutcome === false && pnlPercent < 0)
-        // - Predicted BEAR, but actual market was BULL (actualOutcome === false && pnlPercent > 0)
-        const isOppositeMarketOutcome =
-          pick !== null &&
-          pick.actualOutcome === false &&
-          ((type === "BULL" && (pick.pnlPercent ?? 0) < 0) ||
-           (type === "BEAR" && (pick.pnlPercent ?? 0) > 0));
-
-        if (!isOppositeMarketOutcome) {
-          // Stop immediately: active consecutive streak from the latest trading day ends here
-          break;
-        }
-
-        if (curStreak === 0) {
-          curStreak = 1;
-          curType = type;
-          curPnlSum = pick.pnlPercent || 0;
-        } else if (type === curType) {
-          // Exact same prediction on consecutive trading days with opposite actual market result
-          curStreak++;
-          curPnlSum += pick.pnlPercent || 0;
-        } else {
-          // Prediction switched between BULL and BEAR -> stop immediately (do not combine)
-          break;
-        }
-      }
-
-      if (curStreak >= effectiveMinDays) {
-        results.push({
-          symbol: sym,
-          streak: curStreak,
-          type: curType,
-          pnlSum: parseFloat(curPnlSum.toFixed(2))
-        });
-      }
-    });
-
-    return results.sort((a, b) => b.streak - a.streak);
-  }, [filteredAuditLogs, minStreakDays, data]);
+  const historicalStreakResult = useMemo(
+    () =>
+      computeDisconnectStreaksAtOffset(
+        closedAuditLogs,
+        effectiveHistoryOffset,
+        histMinStreakDays,
+        activeUniverseSet,
+        "BULL",
+        "BEAR"
+      ),
+    [closedAuditLogs, effectiveHistoryOffset, histMinStreakDays, activeUniverseSet]
+  );
 
   const symbolSearchMetrics = useMemo(() => {
     if (!auditSearchSymbol.trim()) return null;
@@ -274,8 +275,19 @@ export default function NextDaySmartDashboard({ personalSymbols = [] }: { person
   }, [viewMode]);
 
   const fetchData = async () => {
+    if (fetchAbortRef.current) {
+      fetchAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    fetchAbortRef.current = controller;
+
     setLoading(true);
     setError(null);
+    // Immediately scope audit logs to the active universe's isolated vault
+    const initialVault = loadClientAuditVault(watchlistFilter);
+    setAuditLogs([...initialVault].reverse());
+    setSelectedAuditIdx(0);
+
     try {
       let targetList: string[] = [];
       if (watchlistFilter === "Personal") targetList = personalSymbols;
@@ -288,18 +300,20 @@ export default function NextDaySmartDashboard({ personalSymbols = [] }: { person
         return;
       }
 
-      // 1. Fetch MWUA Dynamic Weights, Laya RLCD Calibration, and Audit Logs
+      const auditUrl =
+        watchlistFilter === "Personal"
+          ? `/api/historical-audit?universe=Personal&symbols=${encodeURIComponent(targetList.slice(0, 50).join(","))}`
+          : `/api/historical-audit?universe=${encodeURIComponent(watchlistFilter)}`;
+
+      // 1. Fetch MWUA Dynamic Weights, Laya RLCD Calibration, and Universe-Isolated Audit Logs
       const [weightsRes, auditRes] = await Promise.all([
-        fetch("/api/dynamic-weights"),
-        fetch(`/api/historical-audit?universe=${watchlistFilter}&symbols=${encodeURIComponent(targetList.slice(0, 50).join(','))}`)
+        fetch("/api/dynamic-weights", { signal: controller.signal }),
+        fetch(auditUrl, { signal: controller.signal })
       ]);
-      const parseSafeJson = async (res: Response) => {
-        const ct = res.headers.get("content-type") || "";
-        if (!res.ok || !ct.includes("application/json")) return {};
-        return res.json();
-      };
-      const weightsJson = await parseSafeJson(weightsRes);
-      const auditJson = await parseSafeJson(auditRes);
+      const weightsJson = (await safeParseJson<any>(weightsRes)) || {};
+      const auditJson = (await safeParseJson<any>(auditRes)) || {};
+
+      if (controller.signal.aborted) return;
 
       if (weightsJson.status === "ok") {
         setWeights(weightsJson.weights);
@@ -311,59 +325,137 @@ export default function NextDaySmartDashboard({ personalSymbols = [] }: { person
         }
       }
       if (auditJson.status === "ok" && Array.isArray(auditJson.data)) {
-        const clientVault = loadClientAuditVault();
+        const clientVault = loadClientAuditVault(watchlistFilter);
+        // Server live real-data audit entries always take precedence over client cache
         const unifiedChronological = mergeVerifiedAuditLogs(
-          VERIFIED_AUDIT_BASELINE,
           clientVault,
           auditJson.data
         );
-        saveClientAuditVault(unifiedChronological);
+        saveClientAuditVault(watchlistFilter, unifiedChronological);
         const reversed = [...unifiedChronological].reverse();
         setAuditLogs(reversed);
         if (reversed.length > 0) setSelectedAuditIdx(0);
 
-        // If client vault or compiled baseline has records not yet on server disk, sync them back
-        if (unifiedChronological.length > auditJson.data.length) {
-          fetch("/api/sync-historical-audit", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              universe: watchlistFilter,
-              entries: unifiedChronological
-            })
-          }).catch(() => {});
-        }
-
         if (!weightsJson.layaCalibration) {
           setLayaCalibration(fitLayaCalibrationFromHistory(reversed));
         }
+
+        // If server is still finishing a background real-OHLCV sync, re-fetch automatically once complete
+        if (auditJson.syncing) {
+          setTimeout(() => {
+            if (controller.signal.aborted) return;
+            fetch(auditUrl, { signal: controller.signal })
+              .then((r) => safeParseJson<any>(r))
+              .then((fresh) => {
+                if (controller.signal.aborted || fresh?.status !== "ok" || !Array.isArray(fresh.data)) return;
+                const updated = saveClientAuditVault(watchlistFilter, fresh.data);
+                setAuditLogs([...updated].reverse());
+              })
+              .catch(() => {});
+          }, 3500);
+        }
       }
 
-      // 2. Fetch Dashboard Data
-      const chunkCount = 35;
+      // 2. Fast 2-Phase Parallel Loading via NSE MCP EOD Disk Cache + Background Intraday Hydration
+      const chunkCount = 50;
       const chunks: string[][] = [];
       for (let i = 0; i < targetList.length; i += chunkCount) chunks.push(targetList.slice(i, i + chunkCount));
 
-      const allData: any[] = [];
-      for (const chunk of chunks) {
-        const symbolsQuery = chunk.join(",");
-        const response = await fetch(`/api/wt-dashboard?symbols=${encodeURIComponent(symbolsQuery)}`);
-        const ct = response.headers.get("content-type") || "";
-        if (!response.ok || !ct.includes("application/json")) continue;
-        const json = await response.json();
-        if (json.status === "ok" && Array.isArray(json.data)) allData.push(...json.data);
-        if (json.layaLearnedState) setGlobalLayaLearnedState(json.layaLearnedState);
+      const mergedMap = new Map<string, any>();
+      const emitMergedRows = () => {
+        if (controller.signal.aborted) return;
+        const ordered: any[] = [];
+        for (const sym of targetList) {
+          const row = mergedMap.get(sym);
+          if (row) ordered.push(row);
+        }
+        setData(ordered);
+      };
+
+      const mergeRows = (rows: any[]) => {
+        for (const row of rows) {
+          if (!row?.Symbol) continue;
+          const prev = mergedMap.get(row.Symbol);
+          if (prev) {
+            mergedMap.set(row.Symbol, {
+              ...prev,
+              ...row,
+              timeframes: {
+                ...(prev.timeframes || {}),
+                ...(row.timeframes || {}),
+              },
+            });
+          } else {
+            mergedMap.set(row.Symbol, row);
+          }
+        }
+      };
+
+      const fastTfs =
+        activeTimeframe === "1D" || activeTimeframe === "3D" || activeTimeframe === "1W"
+          ? "1D,3D,1W"
+          : `${activeTimeframe},1D,3D,1W`;
+
+      const runWave = async (
+        chunkList: string[][],
+        tfParam: string | null,
+        concurrency: number,
+        releaseSpinnerOnFirst: boolean
+      ) => {
+        let cursor = 0;
+        let firstReleased = false;
+        const worker = async () => {
+          while (cursor < chunkList.length && !controller.signal.aborted) {
+            const idx = cursor++;
+            const chunk = chunkList[idx];
+            const url = tfParam
+              ? `/api/wt-dashboard?symbols=${encodeURIComponent(chunk.join(","))}&timeframes=${encodeURIComponent(tfParam)}`
+              : `/api/wt-dashboard?symbols=${encodeURIComponent(chunk.join(","))}`;
+            try {
+              const response = await fetch(url, { signal: controller.signal });
+              const json = await safeParseJson<any>(response);
+              if (controller.signal.aborted) return;
+              if (json?.status === "ok" && Array.isArray(json.data)) {
+                mergeRows(json.data);
+                emitMergedRows();
+                if (json.layaLearnedState) setGlobalLayaLearnedState(json.layaLearnedState);
+                if (releaseSpinnerOnFirst && !firstReleased) {
+                  firstReleased = true;
+                  setLoading(false);
+                }
+              }
+            } catch (e: any) {
+              if (e?.name === "AbortError") return;
+            }
+          }
+        };
+        await Promise.all(Array.from({ length: Math.min(concurrency, chunkList.length) }, () => worker()));
+      };
+
+      // Phase 1: Instant NSE MCP daily/weekly sweep (renders Top 10 in ~1-2s)
+      await runWave(chunks, fastTfs, 4, true);
+      if (!controller.signal.aborted) {
+        setLoading(false);
+        // Phase 2: Non-blocking full 8-TF hydration in background
+        runWave(chunks, null, 2, false).catch(() => {});
       }
-      setData(allData);
     } catch (err: any) {
+      if (err?.name === "AbortError") return;
       setError(err.message || "Failed to load smart data");
     } finally {
-      setLoading(false);
+      if (!controller.signal.aborted) {
+        setLoading(false);
+      }
     }
   };
 
   useEffect(() => {
     fetchData();
+    return () => {
+      if (fetchAbortRef.current) {
+        fetchAbortRef.current.abort();
+      }
+    };
   }, [watchlistFilter, personalSymbols]);
 
   // Base MWUA + Client-side Laya System-1 synchronous calculation
@@ -551,11 +643,7 @@ export default function NextDaySmartDashboard({ personalSymbols = [] }: { person
         finalistsCount: 10
       })
     })
-      .then(async (res) => {
-        const ct = res.headers.get("content-type") || "";
-        if (!res.ok || !ct.includes("application/json")) return null;
-        return res.json();
-      })
+      .then((res) => safeParseJson<any>(res))
       .then(json => {
         if (cancelled || !json || json.status !== "ok") return;
         if (json.calibration) setLayaCalibration(json.calibration);
@@ -711,9 +799,9 @@ export default function NextDaySmartDashboard({ personalSymbols = [] }: { person
         })
       });
       if (response.ok) {
-        const resJson = await response.json().catch(() => ({}));
+        const resJson = (await safeParseJson<any>(response)) || {};
         if (resJson.entry) {
-          const updatedVault = saveClientAuditVault([...loadClientAuditVault(), resJson.entry]);
+          const updatedVault = saveClientAuditVault(watchlistFilter, [...loadClientAuditVault(watchlistFilter), resJson.entry]);
           setAuditLogs([...updatedVault].reverse());
         }
         setEodStatusBanner("End-of-Day snapshot recorded to server & browser vault. MWUA weights and Laya RLCD calibration updated.");
@@ -733,11 +821,7 @@ export default function NextDaySmartDashboard({ personalSymbols = [] }: { person
     if (symbolsToFetch.length === 0) return;
 
     fetch(`/api/live-quotes?symbols=${encodeURIComponent(symbolsToFetch.join(','))}`)
-      .then(async (res) => {
-        const ct = res.headers.get("content-type") || "";
-        if (!res.ok || !ct.includes("application/json")) return null;
-        return res.json();
-      })
+      .then((res) => safeParseJson<any>(res))
       .then(json => {
         if (json?.status === "ok" && (json.data || json.quotes)) {
           setLiveQuotes(json.data || json.quotes);
@@ -1153,7 +1237,7 @@ export default function NextDaySmartDashboard({ personalSymbols = [] }: { person
         </div>
       )}
 
-      {loading || !weights ? (
+      {(loading && data.length === 0) || !weights ? (
         <div className="flex items-center justify-center py-20">
           <div className="flex flex-col items-center gap-4">
             <BrainCircuit className="w-10 h-10 text-indigo-400 animate-pulse" />
@@ -1586,14 +1670,21 @@ export default function NextDaySmartDashboard({ personalSymbols = [] }: { person
               )}
             </div>
 
-            {/* SECTION D: Consecutive Failures Streak */}
+            {/* SECTION D: Current Prediction Disconnect Streaks (Latest Closed Session) */}
             <div className="bg-slate-800/40 border border-slate-700 rounded-xl p-5 flex flex-col h-[500px]">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-2">
-                  <Activity className="w-5 h-5 text-rose-400" />
-                  <h3 className="font-bold text-slate-100">Prediction Disconnect Streaks</h3>
+              <div className="flex items-center justify-between gap-2 mb-4">
+                <div className="flex items-center gap-2 min-w-0">
+                  <Activity className="w-5 h-5 text-rose-400 shrink-0" />
+                  <div className="min-w-0">
+                    <h3 className="font-bold text-slate-100 truncate">Prediction Disconnect Streaks</h3>
+                    {currentStreakResult.anchorDate && (
+                      <div className="text-[11px] font-mono text-slate-400">
+                        Latest Closed Session: {currentStreakResult.anchorDate}
+                      </div>
+                    )}
+                  </div>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 shrink-0">
                   <span className="text-xs text-slate-400">Min Days:</span>
                   <select
                     value={minStreakDays}
@@ -1618,25 +1709,35 @@ export default function NextDaySmartDashboard({ personalSymbols = [] }: { person
                         <th className="py-2">Symbol</th>
                         <th className="py-2 text-center">Prediction</th>
                         <th className="py-2 text-center">Streak (Days)</th>
-                        <th className="py-2 text-right">Cum. PnL</th>
+                        <th className="py-2 text-right">Dir. PnL</th>
                       </tr>
                     </thead>
                     <tbody>
                       {streakData.map((item, idx) => (
                         <tr key={idx} className="border-b border-slate-700/30 hover:bg-slate-800/50">
-                          <td className="py-2 font-medium flex items-center gap-1">
-                            {item.symbol}
-                            <a href={getTradingViewUrl(item.symbol)} target="_blank" rel="noreferrer" className="text-slate-500 hover:text-indigo-400 transition-colors">
-                              <ExternalLink className="w-3 h-3" />
-                            </a>
+                          <td className="py-2">
+                            <div className="font-medium flex items-center gap-1">
+                              {item.symbol}
+                              <a href={getTradingViewUrl(item.symbol)} target="_blank" rel="noreferrer" className="text-slate-500 hover:text-indigo-400 transition-colors">
+                                <ExternalLink className="w-3 h-3" />
+                              </a>
+                            </div>
+                            {item.days && item.days.length > 0 && (
+                              <div className="text-[10px] font-mono text-slate-400 mt-0.5">
+                                {item.days.map((d) => `${d.date.slice(5)} (${d.movePct > 0 ? "+" : ""}${d.movePct}%)`).join(" · ")}
+                              </div>
+                            )}
                           </td>
                           <td className="py-2 text-center">
                             <span className={`text-xs font-semibold ${item.type === 'BULL' ? 'text-emerald-400' : 'text-rose-400'}`}>
                               {item.type}
                             </span>
+                            <div className="text-[10px] text-slate-500">
+                              {item.type === 'BULL' ? 'vs DOWN' : 'vs UP'}
+                            </div>
                           </td>
-                          <td className="py-2 text-center font-bold text-rose-400 font-mono">{item.streak}</td>
-                          <td className={`py-2 text-right font-mono ${item.pnlSum > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                          <td className="py-2 text-center font-bold text-rose-400 font-mono">{item.streak}d</td>
+                          <td className="py-2 text-right font-mono text-rose-400">
                             {item.pnlSum > 0 ? '+' : ''}{item.pnlSum}%
                           </td>
                         </tr>
@@ -1652,67 +1753,115 @@ export default function NextDaySmartDashboard({ personalSymbols = [] }: { person
               </div>
             </div>
 
-            {/* SECTION C: Weight Matrix (The Brain) & Laya RLCD Calibration */}
-            <div className="bg-slate-800/40 border border-slate-700 rounded-xl p-5 flex flex-col justify-between space-y-6">
-              <div>
-                <div className="flex items-center gap-2 mb-4">
-                  <BrainCircuit className="w-5 h-5 text-indigo-400" />
-                  <h3 className="font-bold text-slate-100">MWUA Weight Matrix ({viewMode === "trend" ? "Trend" : "Reversal"})</h3>
-                </div>
-                <div className="space-y-2.5">
-                  {Object.entries(viewMode === "trend" ? weights.trend : weights.reversal).map(([key, value]) => {
-                    const maxBase = viewMode === "trend" ? 30 : 40;
-                    const pct = Math.min(100, (Number(value) / maxBase) * 100);
-
-                    const labels: Record<string, string> = {
-                      hmaWeight: "D1 HMA", stWeight: "D2 SuperTrend", wtBase: "D3 WaveTrend Base",
-                      wtZero: "D3 Zero Line", wtExtreme: "D3 Extreme Velocity", tsiBase: "D4 TSI",
-                      tsiZero: "D4 TSI Zero", htfWt: "HTF WaveTrend", htfSt: "HTF SuperTrend",
-                      htfHma: "HTF HMA", htfGc: "HTF Golden Cross", crossBonus: "Fresh Cross Bonus",
-                      wtDeep: "D3 Exhaustion", wtSevere: "D3 Severe Exhaust", wtCross: "D3 Reversal Cross",
-                      tsiDeep: "D4 Exhaustion", tsiSevere: "D4 Severe Exhaust", tsiCross: "D4 Reversal Cross",
-                      stFlip: "D2 ST Early Flip", hmaShift: "D1 HMA Early Shift", htfDiv: "HTF Divergence", baseMomentum: "Base Momentum"
-                    };
-
-                    return (
-                      <div key={key} className="flex flex-col gap-1">
-                        <div className="flex justify-between text-xs text-slate-400">
-                          <span>{labels[key] || key}</span>
-                          <span className="font-mono tabular-nums text-indigo-300">{Number(value).toFixed(0)} pts</span>
-                        </div>
-                        <div className="w-full h-1.5 bg-slate-700 rounded-full overflow-hidden">
-                          <div className="h-full bg-indigo-500" style={{ width: `${pct}%` }} />
-                        </div>
+            {/* SECTION C (Replaced): Historical Prediction Disconnect Streaks (Previous Day & 10-Day Dropdown) */}
+            <div className="bg-slate-800/40 border border-slate-700 rounded-xl p-5 flex flex-col h-[500px]">
+              <div className="flex items-center justify-between gap-2 flex-wrap mb-4">
+                <div className="flex items-center gap-2 min-w-0">
+                  <History className="w-5 h-5 text-amber-400 shrink-0" />
+                  <div className="min-w-0">
+                    <h3 className="font-bold text-slate-100 truncate">
+                      {effectiveHistoryOffset === 1
+                        ? "Previous Day Disconnect Streaks"
+                        : "Historical Disconnect Streaks"}
+                    </h3>
+                    {historicalStreakResult.anchorDate && (
+                      <div className="text-[11px] font-mono text-slate-400">
+                        As of Session: {historicalStreakResult.anchorDate}
                       </div>
-                    );
-                  })}
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                  <select
+                    aria-label="Select historical trading day"
+                    value={effectiveHistoryOffset}
+                    onChange={(e) => setHistoryDayOffset(Number(e.target.value))}
+                    disabled={previousDayOptions.length === 0}
+                    className="bg-slate-900 border border-slate-700 text-slate-200 text-xs font-mono rounded-lg px-2.5 py-1.5 outline-none focus:border-amber-500"
+                  >
+                    {previousDayOptions.length > 0 ? (
+                      previousDayOptions.map((opt) => (
+                        <option key={opt.offset} value={opt.offset}>
+                          {opt.label}
+                        </option>
+                      ))
+                    ) : (
+                      <option value={1}>Previous Day</option>
+                    )}
+                  </select>
+                  <select
+                    aria-label="Minimum historical streak days"
+                    value={histMinStreakDays}
+                    onChange={(e) => setHistMinStreakDays(Number(e.target.value))}
+                    className="bg-slate-900 border border-slate-700 text-slate-200 text-xs rounded-lg px-2 py-1.5 outline-none focus:border-amber-500"
+                  >
+                    <option value={2}>2+ Days</option>
+                    <option value={3}>3+ Days</option>
+                    <option value={4}>4+ Days</option>
+                    <option value={5}>5+ Days</option>
+                  </select>
                 </div>
               </div>
-
-              {layaCalibration && (
-                <div className="pt-4 border-t border-slate-700/80 space-y-2">
-                  <div className="text-xs font-semibold text-slate-200">
-                    Laya RLCD Strictly Proper Scoring Calibration
+              <div className="text-xs text-slate-400 mb-4 leading-relaxed">
+                Historical disconnect streaks of <span className="text-slate-200 font-bold">{histMinStreakDays}+ consecutive days</span> ending on{' '}
+                <span className="text-amber-300 font-mono font-semibold">
+                  {historicalStreakResult.anchorDate || "previous session"}
+                </span>{' '}
+                (view up to 10 previous trading days).
+              </div>
+              <div className="flex-1 overflow-auto">
+                {historicalStreakResult.streaks.length > 0 ? (
+                  <table className="w-full text-left text-sm text-slate-300">
+                    <thead className="text-slate-400 border-b border-slate-700/50 sticky top-0 bg-slate-800/90">
+                      <tr>
+                        <th className="py-2">Symbol</th>
+                        <th className="py-2 text-center">Prediction</th>
+                        <th className="py-2 text-center">Streak (Days)</th>
+                        <th className="py-2 text-right">Dir. PnL</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {historicalStreakResult.streaks.map((item, idx) => (
+                        <tr key={idx} className="border-b border-slate-700/30 hover:bg-slate-800/50">
+                          <td className="py-2">
+                            <div className="font-medium flex items-center gap-1">
+                              {item.symbol}
+                              <a href={getTradingViewUrl(item.symbol)} target="_blank" rel="noreferrer" className="text-slate-500 hover:text-indigo-400 transition-colors">
+                                <ExternalLink className="w-3 h-3" />
+                              </a>
+                            </div>
+                            {item.days && item.days.length > 0 && (
+                              <div className="text-[10px] font-mono text-slate-400 mt-0.5">
+                                {item.days.map((d) => `${d.date.slice(5)} (${d.movePct > 0 ? "+" : ""}${d.movePct}%)`).join(" · ")}
+                              </div>
+                            )}
+                          </td>
+                          <td className="py-2 text-center">
+                            <span className={`text-xs font-semibold ${item.type === 'BULL' ? 'text-emerald-400' : 'text-rose-400'}`}>
+                              {item.type}
+                            </span>
+                            <div className="text-[10px] text-slate-500">
+                              {item.type === 'BULL' ? 'vs DOWN' : 'vs UP'}
+                            </div>
+                          </td>
+                          <td className="py-2 text-center font-bold text-rose-400 font-mono">{item.streak}d</td>
+                          <td className="py-2 text-right font-mono text-rose-400">
+                            {item.pnlSum > 0 ? '+' : ''}{item.pnlSum}%
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <div className="flex flex-col items-center justify-center h-full text-slate-500 space-y-2">
+                    <History className="w-8 h-8 opacity-20" />
+                    <p>
+                      No disconnect streaks ≥ {histMinStreakDays} days found on{' '}
+                      {historicalStreakResult.anchorDate || "selected day"}.
+                    </p>
                   </div>
-                  <div className="grid grid-cols-3 gap-2 text-xs font-mono tabular-nums">
-                    <div className="bg-slate-900/60 border border-slate-700/60 rounded-lg p-2.5">
-                      <div className="text-[10px] text-slate-400 font-sans">Brier Score</div>
-                      <div className="text-emerald-400 font-semibold mt-0.5">{layaCalibration.brierScore.toFixed(4)}</div>
-                    </div>
-                    <div className="bg-slate-900/60 border border-slate-700/60 rounded-lg p-2.5">
-                      <div className="text-[10px] text-slate-400 font-sans">Log Loss</div>
-                      <div className="text-indigo-300 font-semibold mt-0.5">{layaCalibration.logLoss.toFixed(4)}</div>
-                    </div>
-                    <div className="bg-slate-900/60 border border-slate-700/60 rounded-lg p-2.5">
-                      <div className="text-[10px] text-slate-400 font-sans">Calib. ECE</div>
-                      <div className="text-slate-200 font-semibold mt-0.5">{(layaCalibration.expectedCalibrationError * 100).toFixed(2)}%</div>
-                    </div>
-                  </div>
-                  <div className="text-[11px] text-slate-400 font-mono tabular-nums">
-                    Temperatures: choice={layaCalibration.temperature[0]} · score={layaCalibration.temperature[1]} · noul={layaCalibration.temperature[2]} ({layaCalibration.sampleCount} EOD samples)
-                  </div>
-                </div>
-              )}
+                )}
+              </div>
             </div>
           </div>
         </div>

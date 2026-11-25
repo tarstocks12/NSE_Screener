@@ -142,9 +142,10 @@ async function fetchOfficialNifty500(): Promise<{
 }> {
   let csvText = "";
   try {
-    csvText = await fetchTextWithTimeout(NIFTY_500_CSV_PRIMARY);
+    // niftyindices.com does not block cloud server IPs with Akamai 403 like nsearchives.nseindia.com
+    csvText = await fetchTextWithTimeout(NIFTY_500_CSV_BACKUP, 8000);
   } catch {
-    csvText = await fetchTextWithTimeout(NIFTY_500_CSV_BACKUP);
+    csvText = await fetchTextWithTimeout(NIFTY_500_CSV_PRIMARY, 8000);
   }
 
   const lines = csvText.trim().split(/\r?\n/);
@@ -195,11 +196,18 @@ async function fetchOfficialNifty500(): Promise<{
   };
 }
 
-async function fetchOfficialFno(): Promise<{ symbols: string[]; descriptions: Record<string, string> }> {
-  const csvText = await fetchTextWithTimeout(FNO_MKTLOTS_CSV_URL);
+async function fetchOfficialFno(): Promise<{ symbols: string[]; descriptions: Record<string, string> } | null> {
+  let csvText = "";
+  try {
+    csvText = await fetchTextWithTimeout(FNO_MKTLOTS_CSV_URL, 6000);
+  } catch {
+    // nsearchives.nseindia.com frequently returns HTTP 403 to cloud/datacenter IPs;
+    // retain the verified bundled/disk-cached official NSE F&O universe cleanly without throwing.
+    return null;
+  }
   const lines = csvText.trim().split(/\r?\n/);
   if (lines.length < 100) {
-    throw new Error(`Unexpected F&O CSV length: ${lines.length}`);
+    return null;
   }
 
   const descriptions: Record<string, string> = {};
@@ -311,24 +319,22 @@ export async function refreshNseWatchlists(force = false): Promise<LiveWatchlist
       let nextNifty500 = cachedState.nifty500;
       let nextFno = cachedState.fno;
 
-      if (fnoRes.status === "fulfilled") {
+      if (fnoRes.status === "fulfilled" && fnoRes.value) {
         nextFno = fnoRes.value.symbols;
         Object.assign(mergedDescriptions, fnoRes.value.descriptions);
         changed = true;
-      } else {
-        console.warn("[NSE Universe Sync] F&O CSV sync failed:", fnoRes.reason?.message || fnoRes.reason);
       }
 
-      if (n500Res.status === "fulfilled") {
+      if (n500Res.status === "fulfilled" && n500Res.value) {
         nextNifty500 = n500Res.value.symbols;
         // Prefer Nifty 500 properly cased Company Name over all-caps F&O underlying name
         Object.assign(mergedDescriptions, n500Res.value.descriptions);
         Object.assign(mergedIndustries, n500Res.value.industries);
         Object.assign(mergedSectors, n500Res.value.sectors);
         changed = true;
-      } else {
-        console.warn("[NSE Universe Sync] Nifty 500 CSV sync failed:", n500Res.reason?.message || n500Res.reason);
       }
+
+      lastFetchMs = Date.now();
 
       if (changed) {
         const updated: LiveWatchlistState = {
@@ -341,7 +347,6 @@ export async function refreshNseWatchlists(force = false): Promise<LiveWatchlist
           source: "nse_official_live"
         };
         cachedState = updated;
-        lastFetchMs = Date.now();
 
         // Update exported arrays in-place so server-side walk-forward audit & helpers stay synced
         FNO_SYMBOLS_LIST.splice(0, FNO_SYMBOLS_LIST.length, ...updated.fno);

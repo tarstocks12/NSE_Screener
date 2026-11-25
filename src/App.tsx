@@ -91,36 +91,7 @@ const getTradingViewUrl = (symbol: string) => {
   return `https://www.tradingview.com/chart/?symbol=NSE:${formattedSymbol}`;
 };
 
-const SEED_SYMBOLS_ALERTS = [
-  { symbol: "BAJAJ_AUTO", type: "R1 LONG", direction: "Bullish" as const, message: "Trend snapback detected. Current TF SuperTrend snapped back into macro HTF direction.", minAgo: 3 },
-  { symbol: "RELIANCE", type: "R3 SHORT", direction: "Bearish" as const, message: "High-probability WaveTrend POI trend alignment and velocity convergence validated.", minAgo: 7 },
-  { symbol: "TCS", type: "E1 LONG", direction: "Bullish" as const, message: "Early reversal cross triggered at extreme oversold/overbought parameters.", minAgo: 11 },
-  { symbol: "NIFTY", type: "H1 Flip Long", direction: "Bullish" as const, message: "Higher Timeframe indicator color profile changed, shifting trend-bias framework.", minAgo: 15 },
-  { symbol: "INFY", type: "DIV SHORT", direction: "Bearish" as const, message: "Pine logic indicator confluence triggers positive entry confirmation parameters.", minAgo: 22 },
-  { symbol: "HDFCBANK", type: "R1 SHORT", direction: "Bearish" as const, message: "Trend snapback detected. Current TF SuperTrend snapped back into macro HTF direction.", minAgo: 29 },
-  { symbol: "ICICIBANK", type: "E1 SHORT", direction: "Bearish" as const, message: "Early reversal cross triggered at extreme oversold/overbought parameters.", minAgo: 34 },
-  { symbol: "BHARTIARTL", type: "R3 LONG", direction: "Bullish" as const, message: "High-probability WaveTrend POI trend alignment and velocity convergence validated.", minAgo: 41 },
-  { symbol: "SBIN", type: "R1 LONG", direction: "Bullish" as const, message: "Trend snapback detected. Current TF SuperTrend snapped back into macro HTF direction.", minAgo: 48 },
-  { symbol: "LICI", type: "E1 LONG", direction: "Bullish" as const, message: "Early reversal cross triggered at extreme oversold/overbought parameters.", minAgo: 55 },
-  { symbol: "ITC", type: "DIV LONG", direction: "Bullish" as const, message: "Pine logic indicator confluence triggers positive entry confirmation parameters.", minAgo: 62 },
-  { symbol: "LT", type: "H1 Flip Short", direction: "Bearish" as const, message: "Higher Timeframe indicator color profile changed, shifting trend-bias framework.", minAgo: 70 },
-  { symbol: "KOTAKBANK", type: "R1 SHORT", direction: "Bearish" as const, message: "Trend snapback detected. Current TF SuperTrend snapped back into macro HTF direction.", minAgo: 78 },
-  { symbol: "AXISBANK", type: "R3 SHORT", direction: "Bearish" as const, message: "High-probability WaveTrend POI trend alignment and velocity convergence validated.", minAgo: 85 },
-  { symbol: "HINDUNILVR", type: "R3 LONG", direction: "Bullish" as const, message: "High-probability WaveTrend POI trend alignment and velocity convergence validated.", minAgo: 94 },
-  { symbol: "AXISBANK", type: "E1 LONG", direction: "Bullish" as const, message: "Early reversal cross triggered at extreme oversold/overbought parameters.", minAgo: 104 },
-  { symbol: "MARUTI", type: "R1 LONG", direction: "Bullish" as const, message: "Trend snapback detected. Current TF SuperTrend snapped back into macro HTF direction.", minAgo: 112 },
-  { symbol: "ULTRACEMCO", type: "DIV SHORT", direction: "Bearish" as const, message: "Pine logic indicator confluence triggers positive entry confirmation parameters.", minAgo: 125 },
-  { symbol: "SUNPHARMA", type: "H1 Flip Long", direction: "Bullish" as const, message: "Higher Timeframe indicator color profile changed, shifting trend-bias framework.", minAgo: 140 },
-  { symbol: "BAJFINANCE", type: "E1 SHORT", direction: "Bearish" as const, message: "Early reversal cross triggered at extreme oversold/overbought parameters.", minAgo: 155 },
-  { symbol: "WIPRO", type: "R1 SHORT", direction: "Bearish" as const, message: "Trend snapback detected. Current TF SuperTrend snapped back into macro HTF direction.", minAgo: 170 },
-  { symbol: "HCLTECH", type: "R3 LONG", direction: "Bullish" as const, message: "High-probability WaveTrend POI trend alignment and velocity convergence validated.", minAgo: 185 },
-  { symbol: "JSWSTEEL", type: "DIV LONG", direction: "Bullish" as const, message: "Pine logic indicator confluence triggers positive entry confirmation parameters.", minAgo: 200 },
-  { symbol: "ADANIENT", type: "E1 LONG", direction: "Bullish" as const, message: "Early reversal cross triggered at extreme oversold/overbought parameters.", minAgo: 220 },
-  { symbol: "TATASTEEL", type: "R1 LONG", direction: "Bullish" as const, message: "Trend snapback detected. Current TF SuperTrend snapped back into macro HTF direction.", minAgo: 240 },
-  { symbol: "GRASIM", type: "R1 SHORT", direction: "Bearish" as const, message: "Trend snapback detected. Current TF SuperTrend snapped back into macro HTF direction.", minAgo: 260 },
-  { symbol: "NTPC", type: "R3 LONG", direction: "Bullish" as const, message: "High-probability WaveTrend POI trend alignment and velocity convergence validated.", minAgo: 280 },
-  { symbol: "POWERGRID", type: "E1 SHORT", direction: "Bearish" as const, message: "Early reversal cross triggered at extreme oversold/overbought parameters.", minAgo: 300 }
-];
+// Live alerts are populated exclusively from real exchange indicator scans.
 
 const getMultivariateConsensus = (row: ScreenerMetrics) => {
   let buyIndicators = 0;
@@ -410,9 +381,7 @@ const getNextDayTradeByRow = (row: any) => {
   };
 };
 
-const generateClientFallbackHistory = (symbol: string, tf: Timeframe): any[] => {
-  return [];
-};
+
 
 export default function App() {
   const [activeTimeframe, setActiveTimeframe] = useState<Timeframe>("1H");
@@ -517,22 +486,7 @@ export default function App() {
   const [screenerRows, setScreenerRows] = useState<ScreenerMetrics[]>([]);
   const [selectedRow, setSelectedRow] = useState<ScreenerMetrics | null>(null);
   const [historicalData, setHistoricalData] = useState<any[]>([]);
-  const [liveAlerts, setLiveAlerts] = useState<LiveAlert[]>(() => {
-    return SEED_SYMBOLS_ALERTS.map((item, idx) => {
-      const now = new Date();
-      now.setMinutes(now.getMinutes() - item.minAgo);
-      const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-      return {
-        id: `seed-${item.symbol}-${item.type}-${idx}`,
-        symbol: item.symbol,
-        type: item.type,
-        direction: item.direction,
-        message: item.message,
-        time: timeStr,
-        price: 0
-      };
-    });
-  });
+  const [liveAlerts, setLiveAlerts] = useState<LiveAlert[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [selectedAssetType, setSelectedAssetType] = useState<"All" | "Equities" | "Indices">("All");
   const [sortField, setSortField] = useState<string>("ConfidenceScore");

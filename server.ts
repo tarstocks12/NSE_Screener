@@ -67,7 +67,9 @@ import {
   computeStockNseAnalytics,
   getNseStockDeepIntel,
   ensureNseEodDiskCacheLoaded,
-  getNseEodCacheStats
+  getNseEodCacheStats,
+  seedEodCacheFromRealCandles,
+  getCachedEodQuoteSummary
 } from "./src/lib/nse-mcp-client.js";
 import {
   getLiveWatchlists,
@@ -371,74 +373,100 @@ function aggregateToMonthly(candles: Candle[]): Candle[] {
   return aggregated.sort((a, b) => a.time - b.time);
 }
 
-// Simple seed-based PRNG for deterministic fallback candles
-function seedRandom(seedStr: string) {
-  let h = 0;
-  for (let i = 0; i < seedStr.length; i++) {
-    h = (Math.imul(31, h) + seedStr.charCodeAt(i)) | 0;
-  }
-  return function() {
-    h = (h + 0x9e3779b9) | 0;
-    let z = h;
-    z = Math.imul(z ^ (z >>> 16), 2246822507);
-    z = Math.imul(z ^ (z >>> 13), 3266489909);
-    return ((z ^ (z >>> 16)) >>> 0) / 4294967296;
-  };
-}
-
-// Offline high-fidelity fallback series generator aligned with NSE baselines
-function generateHighFidelityFallbackCandles(symbol: string, timeframe: Timeframe): Candle[] {
-  const sym = BASE_SYMBOLS.find(s => s.Symbol === symbol);
-  const baseline = sym ? (sym.ScreenerPrice || 1000) : 500;
-  
-  const candles: Candle[] = [];
-  const now = Date.now();
-  
-  let currentVal = baseline;
-  const count = 150; // Increased count to support 150 SMA calculation perfectly
-  
-  const stepMs = timeframe === "1m" ? 1 * 60 * 1000 :
-                 timeframe === "5m" ? 5 * 60 * 1000 :
-                 timeframe === "15m" ? 15 * 60 * 1000 :
-                 timeframe === "1H" ? 60 * 60 * 1000 :
-                 timeframe === "3H" ? 3 * 60 * 60 * 1000 :
-                 timeframe === "4H" ? 4 * 60 * 60 * 1000 :
-                 timeframe === "1D" ? 24 * 60 * 60 * 1000 :
-                 timeframe === "3D" ? 3 * 24 * 60 * 60 * 1000 :
-                 timeframe === "1W" ? 7 * 24 * 60 * 60 * 1000 :
-                 30 * 24 * 60 * 60 * 1000; // 1M
-                 
-  // Stable seed based on symbol, timeframe, and current 1-hour window to keep watchlists synced
-  const oneHourWindow = Math.floor(now / (3600 * 1000));
-  const seedString = `${symbol}_${timeframe}_${oneHourWindow}`;
-  const rand = seedRandom(seedString);
-                 
-  for (let i = count - 1; i >= 0; i--) {
-    const time = now - i * stepMs;
-    const noise = (Math.sin(i * 0.12) + Math.cos(i * 0.04)) * (baseline * 0.006) + (rand() - 0.5) * (baseline * 0.002);
-    const open = currentVal + noise;
-    const close = open + (rand() - 0.5) * (baseline * 0.008);
-    const high = Math.max(open, close) + rand() * (baseline * 0.003);
-    const low = Math.min(open, close) - rand() * (baseline * 0.003);
-    const volume = Math.floor(rand() * 800000) + 120000;
-    
-    candles.push({ time, open, high, low, close, volume });
-    currentVal = close;
-  }
-  return candles;
-}
+// Real market data only — no synthetic or fallback candles are ever generated.
 
 const candleCacheRegistry = new Map<string, { timestamp: number; promise: Promise<Candle[]> }>();
+const yahooBaseSeriesCache = new Map<string, { timestamp: number; promise: Promise<Candle[]> }>();
+const CANDLE_CACHE_TTL_MS = 180_000; // 3-minute TTL eliminates redundant external network fetches across tab switches
+const YAHOO_FETCH_TIMEOUT_MS = 4500;
 
-// Core service to fetch actual stock candles from Yahoo Finance
+async function fetchYahooChartRaw(symbol: string, interval: string, range: string): Promise<Candle[]> {
+  const ticker = getYahooTicker(symbol);
+  const baseKey = `${ticker}|${interval}|${range}`;
+  const now = Date.now();
+  const cached = yahooBaseSeriesCache.get(baseKey);
+  if (cached && now - cached.timestamp < CANDLE_CACHE_TTL_MS) {
+    return cached.promise;
+  }
+
+  const promise = (async () => {
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=${interval}&range=${range}`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), YAHOO_FETCH_TIMEOUT_MS);
+    try {
+      const response = await fetch(url, {
+        signal: controller.signal,
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP fetch error status ${response.status}`);
+      }
+      const ct = response.headers.get("content-type") || "";
+      if (!ct.includes("application/json")) {
+        throw new Error(`Unexpected non-JSON Yahoo response (${ct})`);
+      }
+      const data: any = await response.json();
+      const result = data?.chart?.result?.[0];
+      if (!result) throw new Error("Chart empty results");
+
+      const timestamps: number[] = result.timestamp || [];
+      const indicators = result.indicators?.quote?.[0];
+      if (!indicators || timestamps.length === 0) throw new Error("Technical quote data missing");
+
+      const opens = indicators.open || [];
+      const highs = indicators.high || [];
+      const lows = indicators.low || [];
+      const closes = indicators.close || [];
+      const volumes = indicators.volume || [];
+      const scaleFactor = getScaleFactor(symbol);
+      const candles: Candle[] = [];
+
+      for (let i = 0; i < timestamps.length; i++) {
+        const open = opens[i];
+        const high = highs[i];
+        const low = lows[i];
+        const close = closes[i];
+        const vol = volumes[i] ?? 0;
+        if (
+          open === null || open === undefined ||
+          high === null || high === undefined ||
+          low === null || low === undefined ||
+          close === null || close === undefined
+        ) {
+          continue;
+        }
+        candles.push({
+          time: timestamps[i] * 1000,
+          open: open * scaleFactor,
+          high: high * scaleFactor,
+          low: low * scaleFactor,
+          close: close * scaleFactor,
+          volume: vol
+        });
+      }
+      return candles;
+    } catch (err) {
+      yahooBaseSeriesCache.delete(baseKey);
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+  })();
+
+  yahooBaseSeriesCache.set(baseKey, { timestamp: now, promise });
+  return promise;
+}
+
+// Core service to fetch actual stock candles (NSE MCP EOD + deduplicated Yahoo real exchange feeds)
 async function fetchLiveCandles(symbol: string, timeframe: Timeframe): Promise<Candle[]> {
   const ticker = getYahooTicker(symbol);
   const cacheKey = `${ticker}_${timeframe}`;
   const now = Date.now();
   const cached = candleCacheRegistry.get(cacheKey);
-  const TTL = 45000; // 45 seconds TTL is the sweet spot for responsiveness & complete parallel deduplication
 
-  if (cached && (now - cached.timestamp < TTL)) {
+  if (cached && now - cached.timestamp < CANDLE_CACHE_TTL_MS) {
     return cached.promise;
   }
 
@@ -446,12 +474,13 @@ async function fetchLiveCandles(symbol: string, timeframe: Timeframe): Promise<C
     try {
       const candles = await fetchLiveCandlesDirect(symbol, timeframe);
       if (!candles || candles.length < 5) {
-        throw new Error("Insufficient candles retrieved or empty chart data");
+        candleCacheRegistry.delete(cacheKey);
+        return [];
       }
       return candles;
-    } catch (err: any) {
-      // Fallback cleanly to high-fidelity generated candles
-      return generateHighFidelityFallbackCandles(symbol, timeframe);
+    } catch {
+      candleCacheRegistry.delete(cacheKey);
+      return [];
     }
   })();
 
@@ -460,25 +489,24 @@ async function fetchLiveCandles(symbol: string, timeframe: Timeframe): Promise<C
 }
 
 async function fetchLiveCandlesDirect(symbol: string, timeframe: Timeframe): Promise<Candle[]> {
-  // Hybrid Architecture: Use official NSE MCP (nse-bhavcopy 5Y EOD + live cm-market bar stitch)
+  // Hybrid Architecture: Official NSE MCP (nse-bhavcopy disk-cached EOD + cm-market bar stitch)
   // for Daily & Higher Timeframes (1D, 3D, 1W, 1M), with seamless fallback to Yahoo Finance v8.
-  // Intraday timeframes (1m, 5m, 15m, 1H, 3H, 4H) remain on Yahoo Finance v8.
+  // Intraday timeframes share deduplicated base Yahoo requests (5m+15m -> 1 call, 1H+3H+4H -> 1 call).
   if (isNseMcpTimeframe(timeframe)) {
     try {
       const nseCandles = await fetchNseHybridCandles(symbol, timeframe);
       if (nseCandles && nseCandles.length >= 5) {
         return nseCandles;
       }
-    } catch (nseErr: any) {
-      console.warn(`[NSE MCP] Fallback to Yahoo for ${symbol} (${timeframe}):`, nseErr?.message || nseErr);
+    } catch {
+      // Fall back cleanly to Yahoo below
     }
   }
 
-  const ticker = getYahooTicker(symbol);
-  
   let interval = "1h";
-  let range = "1mo";
-  
+  let range = "60d";
+  let aggregateFactor = 1;
+
   if (timeframe === "1m") {
     interval = "1m";
     range = "5d";
@@ -486,23 +514,29 @@ async function fetchLiveCandlesDirect(symbol: string, timeframe: Timeframe): Pro
     interval = "5m";
     range = "1mo";
   } else if (timeframe === "15m") {
-    interval = "15m";
+    // Share the 5m&range=1mo Yahoo call and aggregate 3x5m in memory -> cuts 5m/15m HTTP traffic in half
+    interval = "5m";
     range = "1mo";
+    aggregateFactor = 3;
   } else if (timeframe === "1H") {
-    interval = "60m";
-    range = "1mo";
+    // Share the 1h&range=60d Yahoo call across 1H, 3H, and 4H -> cuts hourly HTTP traffic by 67%
+    interval = "1h";
+    range = "60d";
   } else if (timeframe === "3H") {
     interval = "1h";
     range = "60d";
+    aggregateFactor = 3;
   } else if (timeframe === "4H") {
     interval = "1h";
     range = "60d";
+    aggregateFactor = 4;
   } else if (timeframe === "1D") {
     interval = "1d";
     range = "2y";
   } else if (timeframe === "3D") {
     interval = "1d";
-    range = "3y";
+    range = "2y";
+    aggregateFactor = 3;
   } else if (timeframe === "1W") {
     interval = "1wk";
     range = "5y";
@@ -510,153 +544,44 @@ async function fetchLiveCandlesDirect(symbol: string, timeframe: Timeframe): Pro
     interval = "1mo";
     range = "10y";
   }
-  
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=${interval}&range=${range}`;
-  
+
   try {
-    const response = await fetch(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"
-      }
-    });
-    
-    if (!response.ok) {
-      throw new Error(`HTTP fetch error status ${response.status}`);
+    let candles = await fetchYahooChartRaw(symbol, interval, range);
+    if (interval === "1d" && candles.length >= 20) {
+      seedEodCacheFromRealCandles(symbol, candles);
     }
-    
-    const data: any = await response.json();
-    const result = data?.chart?.result?.[0];
-    if (!result) {
-      throw new Error(`Chart empty results`);
-    }
-    
-    const timestamps: number[] = result.timestamp || [];
-    const indicators = result.indicators?.quote?.[0];
-    if (!indicators || timestamps.length === 0) {
-      throw new Error(`Technical quote data missing`);
-    }
-    
-    const opens = indicators.open || [];
-    const highs = indicators.high || [];
-    const lows = indicators.low || [];
-    const closes = indicators.close || [];
-    const volumes = indicators.volume || [];
-    
-    let candles: Candle[] = [];
-    const scaleFactor = getScaleFactor(symbol);
-    
-    for (let i = 0; i < timestamps.length; i++) {
-      const open = opens[i];
-      const high = highs[i];
-      const low = lows[i];
-      const close = closes[i];
-      const vol = volumes[i] ?? 0;
-      
-      if (open === null || open === undefined ||
-          high === null || high === undefined ||
-          low === null || low === undefined ||
-          close === null || close === undefined) {
-        continue;
-      }
-      
-      candles.push({
-        time: timestamps[i] * 1000,
-        open: open * scaleFactor,
-        high: high * scaleFactor,
-        low: low * scaleFactor,
-        close: close * scaleFactor,
-        volume: vol
-      });
-    }
-    
-    if (timeframe === "3H") {
-      candles = aggregateCandles(candles, 3);
-    }
-    
-    if (timeframe === "4H") {
-      candles = aggregateCandles(candles, 4);
+    if (aggregateFactor > 1) {
+      candles = aggregateCandles(candles, aggregateFactor);
     }
 
-    if (timeframe === "3D") {
-      candles = aggregateCandles(candles, 3);
-    }
-    
     if (candles.length < 5) {
       if (timeframe === "1M") {
-        console.log(`[API Info] 1M candles count (${candles.length}) too low. Attempting weekly fallback aggregation.`);
         try {
           const weeklyCandles = await fetchLiveCandlesDirect(symbol, "1W");
           const aggregated = aggregateToMonthly(weeklyCandles);
-          if (aggregated.length >= 5) {
-            return aggregated;
-          }
-        } catch (fallbackError: any) {
-          console.warn(`[API Info] 1M fallback weekly fetch failed: ${fallbackError.message || fallbackError}`);
+          if (aggregated.length >= 5) return aggregated;
+        } catch {
+          // ignore
         }
       }
       throw new Error("Insufficient candles retrieved");
     }
-    
     return candles;
   } catch (error) {
     if (timeframe === "1M") {
-      console.log(`[API Info] 1M direct fetch failed. Attempting weekly fallback aggregation due to: ${(error as any)?.message}`);
       try {
         const weeklyCandles = await fetchLiveCandlesDirect(symbol, "1W");
         const aggregated = aggregateToMonthly(weeklyCandles);
-        if (aggregated.length >= 5) {
-          return aggregated;
-        }
-      } catch (fallbackError: any) {
-        // Fallback handled by caller
+        if (aggregated.length >= 5) return aggregated;
+      } catch {
+        // ignore
       }
     }
     throw error;
   }
 }
 
-// Safe fallback Pine results when indicator evaluation or parsing fails
-function getSafeFallbackPineResults(symbol: string, candles: Candle[]): PineResults {
-  const currentPrice = candles[candles.length - 1]?.close || 500;
-  const emaCrossVal = computeEmaTrendCounter(candles);
-
-  return {
-    Symbol: symbol,
-    CurrentPrice: currentPrice,
-    ChangePercent: 0,
-    SessionChangePercent: 0,
-    ActiveSignal: "None",
-    ST_Chart_Upper: currentPrice * 1.05,
-    ST_Chart_Avg: currentPrice,
-    ST_Chart_Lower: currentPrice * 0.95,
-    ST_HTF1_Upper: currentPrice * 1.07,
-    ST_HTF1_Avg: currentPrice,
-    ST_HTF1_Lower: currentPrice * 0.93,
-    CTF_HMA: currentPrice,
-    CTF_SMA: currentPrice,
-    CTF_SMA_Slow: currentPrice,
-    HTF_HMA: currentPrice,
-    WT1_Current: 0,
-    WT2_Current: 0,
-    HTF1_WT1: 0,
-    HTF1_WT2: 0,
-    HTF2_WT1: 0,
-    HTF2_WT2: 0,
-    HTF_SMA: currentPrice,
-    StopLoss: currentPrice * 0.98,
-    TakeProfit: currentPrice * 1.03,
-    ConfidenceScore: 60,
-    ConfluenceScore: 50,
-    EmaCross: emaCrossVal,
-    Volume: 500000,
-    WinRate: 70,
-    TotalTrades: 50,
-    AverageReturn: 1.5,
-    SupportRejections: 1,
-    ResistanceRejections: 1,
-    SignalsGenerated: []
-  };
-}
+// Only genuine exchange candles are processed; unavailable feeds return getUnavailablePineResults(symbol).
 
 // Process single symbol indicators & self learning loops with ultra-robust error boundaries
 async function getProcessedResultForSymbol(symbol: string, timeframe: Timeframe, isSelected = false, engine = "quant_swt"): Promise<{ data: PineResults; candles: Candle[]; markov: MarkovSignalResult }> {
@@ -679,28 +604,35 @@ async function getProcessedResultForSymbol(symbol: string, timeframe: Timeframe,
     const sym = BASE_SYMBOLS.find(s => s.Symbol === symbol);
     const description = sym ? sym.Description : (getNseSymbolDescription(symbol) || `${symbol} Ltd`);
     
-    // Fetch live candles
-    let candles = await fetchLiveCandles(symbol, timeframe).catch(() => []);
+    // Fetch live actual exchange candles only (never synthetic fallback)
+    const candles = await fetchLiveCandles(symbol, timeframe).catch(() => []);
     if (!candles || candles.length < 5) {
-      candles = generateHighFidelityFallbackCandles(symbol, timeframe);
+      return {
+        data: getUnavailablePineResults(symbol),
+        candles: [],
+        markov: { direction: "WAIT", score: 0, regime: "Side", confidence: 0 }
+      };
     }
     
-    // Asynchronously fetch HTF and HHTF candles for strict Pine MTF logic
+    // Asynchronously fetch actual HTF and HHTF candles for strict Pine MTF logic
     const targetTimeframes = getHtfTimeframes(timeframe);
-    let htfCandles = await fetchLiveCandles(symbol, targetTimeframes.htf).catch(() => []);
-    if (!htfCandles || htfCandles.length < 5) {
-      htfCandles = generateHighFidelityFallbackCandles(symbol, targetTimeframes.htf);
-    }
-
-    let hhtfCandles = await fetchLiveCandles(symbol, targetTimeframes.hhtf).catch(() => []);
-    if (!hhtfCandles || hhtfCandles.length < 5) {
-      hhtfCandles = generateHighFidelityFallbackCandles(symbol, targetTimeframes.hhtf);
-    }
+    const [htfCandles, hhtfCandles] = await Promise.all([
+      fetchLiveCandles(symbol, targetTimeframes.htf).catch(() => []),
+      fetchLiveCandles(symbol, targetTimeframes.hhtf).catch(() => [])
+    ]);
     
     // Compile and run the indicator calculations with processPineScript
     let processed: PineResults;
     try {
-      processed = processPineScript(symbol, description, candles, htfCandles, hhtfCandles, engine, timeframe);
+      processed = processPineScript(
+        symbol,
+        description,
+        candles,
+        htfCandles.length >= 5 ? htfCandles : [],
+        hhtfCandles.length >= 5 ? hhtfCandles : [],
+        engine,
+        timeframe
+      );
     } catch (pineErr) {
       console.error(`[API Error] processPineScript failed for ${symbol}:`, pineErr);
       processed = getUnavailablePineResults(symbol);
@@ -718,8 +650,7 @@ async function getProcessedResultForSymbol(symbol: string, timeframe: Timeframe,
     return { data: processed, candles, markov: markovResult };
   } catch (err) {
     console.error(`[API Critical Error] Failed to process symbol ${symbol}:`, err);
-    const fallbackCandles = generateHighFidelityFallbackCandles(symbol, timeframe);
-    return { data: getUnavailablePineResults(symbol), candles: fallbackCandles, markov: { direction: "WAIT", score: 0, regime: "Side", confidence: 0 } };
+    return { data: getUnavailablePineResults(symbol), candles: [], markov: { direction: "WAIT", score: 0, regime: "Side", confidence: 0 } };
   }
 }
 
@@ -1102,6 +1033,11 @@ function calcSupertrendChannel(candles: Candle[], atrPeriod = 10, factor = 3.0) 
   return { max_val, min_val, avg_val, os_val, dir };
 }
 
+// 4-minute server-side computed row cache for /api/wt-dashboard so tab switching & repeat scans are instant (< 50ms)
+const wtDashboardRowCache = new Map<string, { timestamp: number; row: any }>();
+const WT_DASHBOARD_ROW_TTL_MS = 240_000;
+const ALL_SUPPORTED_TIMEFRAMES: Timeframe[] = ["5m", "15m", "1H", "3H", "4H", "1D", "3D", "1W"];
+
 app.get("/api/wt-dashboard", async (req, res) => {
   try {
     const symbolsParam = req.query.symbols as string;
@@ -1109,14 +1045,36 @@ app.get("/api/wt-dashboard", async (req, res) => {
       return res.status(400).json({ status: "error", message: "Missing symbols parameter" });
     }
     const symbols = symbolsParam.split(",").map(s => s.trim().toUpperCase()).filter(Boolean);
-    
-    // Supported timeframes
-    const timeframes: Timeframe[] = ["5m", "15m", "1H", "3H", "4H", "1D", "3D", "1W"];
+
+    // Optional `?timeframes=1D,3D,1W` fast-path for instant NSE MCP first paint, defaulting to all 8 TFs
+    const tfParam = typeof req.query.timeframes === "string" ? req.query.timeframes : "";
+    const requestedTfs = tfParam
+      ? tfParam
+          .split(",")
+          .map(t => t.trim() as Timeframe)
+          .filter(t => ALL_SUPPORTED_TIMEFRAMES.includes(t))
+      : ALL_SUPPORTED_TIMEFRAMES;
+    const timeframes: Timeframe[] = requestedTfs.length > 0 ? requestedTfs : ALL_SUPPORTED_TIMEFRAMES;
+    const tfMaskKey = timeframes.join(",");
+    const fullMaskKey = ALL_SUPPORTED_TIMEFRAMES.join(",");
 
     // Fetch cached official Nifty 50 daily series once for 0ms RS/Beta/Correlation computation across all rows
     const nifty1dCandles = await fetchLiveCandles("NIFTY", "1D").catch(() => null);
-    
-    const results = await processInBatches(symbols, 10, async (symbol) => {
+    const nowCacheMs = Date.now();
+
+    const results = await processInBatches(symbols, 24, async (symbol) => {
+      // Serve instant cache hit if full 8-TF row (or exact tfMaskKey row) is already warm
+      const fullCached = wtDashboardRowCache.get(`${symbol}|${fullMaskKey}`);
+      if (fullCached && nowCacheMs - fullCached.timestamp < WT_DASHBOARD_ROW_TTL_MS) {
+        return fullCached.row;
+      }
+      if (tfMaskKey !== fullMaskKey) {
+        const subsetCached = wtDashboardRowCache.get(`${symbol}|${tfMaskKey}`);
+        if (subsetCached && nowCacheMs - subsetCached.timestamp < WT_DASHBOARD_ROW_TTL_MS) {
+          return subsetCached.row;
+        }
+      }
+
       // Find info
       const symData = BASE_SYMBOLS.find(s => s.Symbol === symbol);
       const companyName = symData ? symData.Description : (getNseSymbolDescription(symbol) || `${symbol} Corp`);
@@ -2312,7 +2270,7 @@ app.get("/api/wt-dashboard", async (req, res) => {
           };
 
       if (totalWeight === 0) {
-        return {
+        const unavailableRow = {
           Symbol: symbol,
           Description: companyName,
           wtStrength: null,
@@ -2335,9 +2293,11 @@ app.get("/api/wt-dashboard", async (req, res) => {
           nseIntel,
           isUnavailable: true
         };
+        wtDashboardRowCache.set(`${symbol}|${tfMaskKey}`, { timestamp: Date.now(), row: unavailableRow });
+        return unavailableRow;
       }
       
-      return {
+      const computedRow = {
         Symbol: symbol,
         Description: companyName,
         wtStrength: strengthScore,
@@ -2359,6 +2319,8 @@ app.get("/api/wt-dashboard", async (req, res) => {
         timeframes: tfData,
         nseIntel
       };
+      wtDashboardRowCache.set(`${symbol}|${tfMaskKey}`, { timestamp: Date.now(), row: computedRow });
+      return computedRow;
     });
     
     // Continuously self-learn from newly computed walk-forward timeframe pre-turn conversion audits
@@ -2427,24 +2389,24 @@ app.get("/api/symbol-history/:symbol", async (req, res) => {
   
   try {
     const { data: processed, candles: rawCandles } = await getProcessedResultForSymbol(symbol, timeframe, true, engine);
-    const candles = (rawCandles && rawCandles.length >= 5) ? rawCandles : generateHighFidelityFallbackCandles(symbol, timeframe);
+    if (!rawCandles || rawCandles.length < 5) {
+      return res.json({ status: "unavailable", history: [], metrics: processed });
+    }
+    const candles = rawCandles;
     
     const high = candles.map(c => c.high);
     const low = candles.map(c => c.low);
     const close = candles.map(c => c.close);
     const volume = candles.map(c => c.volume);
     
-    // Asynchronously fetch HTF and HHTF candles for strict Pine MTF logic
+    // Asynchronously fetch actual HTF and HHTF candles for strict Pine MTF logic
     const targetTimeframes = getHtfTimeframes(timeframe);
-    let htfCandles = await fetchLiveCandles(symbol, targetTimeframes.htf).catch(() => []);
-    if (!htfCandles || htfCandles.length < 5) {
-      htfCandles = generateHighFidelityFallbackCandles(symbol, targetTimeframes.htf);
-    }
-
-    let hhtfCandles = await fetchLiveCandles(symbol, targetTimeframes.hhtf).catch(() => []);
-    if (!hhtfCandles || hhtfCandles.length < 5) {
-      hhtfCandles = generateHighFidelityFallbackCandles(symbol, targetTimeframes.hhtf);
-    }
+    const [fetchedHtf, fetchedHhtf] = await Promise.all([
+      fetchLiveCandles(symbol, targetTimeframes.htf).catch(() => []),
+      fetchLiveCandles(symbol, targetTimeframes.hhtf).catch(() => [])
+    ]);
+    const htfCandles = fetchedHtf.length >= 5 ? fetchedHtf : candles;
+    const hhtfCandles = fetchedHhtf.length >= 5 ? fetchedHhtf : candles;
 
     const htfClose = htfCandles.map(c => c.close);
     const htfHigh = htfCandles.map(c => c.high);
@@ -2536,7 +2498,7 @@ app.get("/api/symbol-history/:symbol", async (req, res) => {
       const st_c_turned_bull = st_c_dir === 1 && st_c_dir_prev === -1;
       const st_c_turned_bear = st_c_dir === -1 && st_c_dir_prev === 1;
 
-      // Mock money indices for fallback matching
+      // Pine Script R1 snapback trigger conditions
       const r1_long = st_c_turned_bull && allow_long && wt_recently_os;
       const r1_short = st_c_turned_bear && allow_short && wt_recently_ob;
 
@@ -2838,6 +2800,100 @@ app.get("/api/nse/market-mood", async (req, res) => {
   }
 });
 
+const PSU_BANK_SYMBOLS = new Set([
+  "SBIN", "BANKBARODA", "PNB", "CANBK", "UNIONBANK", "INDIANB", "BANKINDIA", "IOB", "UCOBANK", "MAHABANK", "CENTRALBK"
+]);
+
+const sectorConstituentYahooQuoteCache = new Map<
+  string,
+  { fetchedAt: number; close: number; prevClose: number; perChange: number; volume: number; turnover: number }
+>();
+
+async function fetchYahooQuickQuote(sym: string): Promise<{
+  close: number;
+  prevClose: number;
+  perChange: number;
+  volume: number;
+  turnover: number;
+} | null> {
+  const now = Date.now();
+  const cached = sectorConstituentYahooQuoteCache.get(sym);
+  if (cached && now - cached.fetchedAt < 5 * 60 * 1000) {
+    return cached;
+  }
+  const yfSym = sym === "BAJAJ_AUTO" ? "BAJAJ-AUTO.NS" : sym === "NAM_INDIA" ? "NAM-INDIA.NS" : `${sym}.NS`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yfSym)}?interval=1d&range=5d`, {
+      signal: controller.signal,
+      headers: { "User-Agent": "Mozilla/5.0" }
+    });
+    if (!res.ok) return cached || null;
+    const j: any = await res.json();
+    const chart = j?.chart?.result?.[0];
+    if (!chart) return cached || null;
+    const meta = chart.meta || {};
+    const q = chart.indicators?.quote?.[0] || {};
+    const closes: number[] = (q.close || []).filter((v: any) => typeof v === "number" && Number.isFinite(v) && v > 0);
+    const vols: number[] = (q.volume || []).filter((v: any) => typeof v === "number" && Number.isFinite(v) && v >= 0);
+    const close = Number(meta.regularMarketPrice) || closes[closes.length - 1] || 0;
+    if (!close || close <= 0) return cached || null;
+    const prevClose = closes.length >= 2 ? closes[closes.length - 2] : (Number(meta.chartPreviousClose) || close);
+    const perChange = prevClose > 0 ? ((close - prevClose) / prevClose) * 100 : 0;
+    const volume = Number(meta.regularMarketVolume) || vols[vols.length - 1] || 0;
+    const turnover = volume > 0 ? volume * close : 0;
+    const entry = { fetchedAt: Date.now(), close, prevClose, perChange, volume, turnover };
+    sectorConstituentYahooQuoteCache.set(sym, entry);
+    return entry;
+  } catch {
+    return cached || null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function resolveSectorConstituents(indexName: string, sectorConstituentsMap: Record<string, string[]>): string[] {
+  const key = indexName.trim().toUpperCase();
+  const direct = sectorConstituentsMap[key];
+  if (direct && direct.length > 0 && key !== "NIFTY ENERGY") return direct;
+
+  if (key === "NIFTY PSU BANK") {
+    return (sectorConstituentsMap["NIFTY BANK"] || []).filter(sym => PSU_BANK_SYMBOLS.has(sym));
+  }
+  if (key === "NIFTY PVT BANK" || key === "NIFTY PRIVATE BANK") {
+    return (sectorConstituentsMap["NIFTY BANK"] || []).filter(sym => !PSU_BANK_SYMBOLS.has(sym));
+  }
+  if (key === "NIFTY HEALTHCARE" || key === "NIFTY HEALTHCARE INDEX") {
+    return sectorConstituentsMap["NIFTY PHARMA"] || [];
+  }
+  if (key === "NIFTY ENERGY") {
+    return Array.from(
+      new Set([
+        ...(sectorConstituentsMap["NIFTY ENERGY"] || []),
+        ...(sectorConstituentsMap["NIFTY OIL & GAS"] || [])
+      ])
+    );
+  }
+  if (key === "NIFTY COMMODITIES") {
+    return Array.from(
+      new Set([
+        ...(sectorConstituentsMap["NIFTY COMMODITIES"] || []),
+        ...(sectorConstituentsMap["NIFTY METAL"] || []),
+        ...(sectorConstituentsMap["NIFTY OIL & GAS"] || []),
+        ...(sectorConstituentsMap["NIFTY CHEMICALS"] || [])
+      ])
+    );
+  }
+  if (key === "NIFTY CONSUMER DURABLES" || key === "NIFTY CONSR DURBL") {
+    return sectorConstituentsMap["NIFTY CONSR DURBL"] || [];
+  }
+  if (key === "NIFTY FINANCIAL SERVICES" || key === "NIFTY FIN SERVICE") {
+    return sectorConstituentsMap["NIFTY FIN SERVICE"] || [];
+  }
+  return direct || [];
+}
+
 app.get("/api/nse/sectoral-rotation", async (req, res) => {
   try {
     const force = req.query.refresh === "1" || req.query.refresh === "true";
@@ -2848,7 +2904,7 @@ app.get("/api/nse/sectoral-rotation", async (req, res) => {
       getLiveWatchlists()
     ]);
 
-    if (!rotation) {
+    if (!rotation || !Array.isArray(rotation.sectors) || rotation.sectors.length === 0) {
       return res.status(503).json({ status: "error", message: "Sectoral rotation data temporarily unavailable" });
     }
 
@@ -2864,24 +2920,7 @@ app.get("/api/nse/sectoral-rotation", async (req, res) => {
     }
 
     const enrichedSectors = rotation.sectors.map(s => {
-      // Match direct sector key or close alias
-      let members = sectorConstituentsMap[s.indexName] || [];
-      if (members.length === 0) {
-        if (s.indexName === "NIFTY PSU BANK" || s.indexName === "NIFTY PVT BANK") {
-          members = (sectorConstituentsMap["NIFTY BANK"] || []).filter(sym =>
-            s.indexName === "NIFTY PSU BANK"
-              ? ["SBIN", "BANKBARODA", "PNB", "CANBK", "UNIONBANK", "INDIANB", "BANKINDIA", "IOB", "UCOBANK", "MAHABANK", "CENTRALBK"].includes(sym)
-              : !["SBIN", "BANKBARODA", "PNB", "CANBK", "UNIONBANK", "INDIANB", "BANKINDIA", "IOB", "UCOBANK", "MAHABANK", "CENTRALBK"].includes(sym)
-          );
-        } else if (s.indexName === "NIFTY HEALTHCARE") {
-          members = sectorConstituentsMap["NIFTY PHARMA"] || [];
-        } else if (s.indexName === "NIFTY ENERGY") {
-          members = [
-            ...(sectorConstituentsMap["NIFTY ENERGY"] || []),
-            ...(sectorConstituentsMap["NIFTY OIL & GAS"] || [])
-          ];
-        }
-      }
+      const members = resolveSectorConstituents(s.indexName, sectorConstituentsMap);
       return {
         ...s,
         constituentCount: members.length,
@@ -2889,49 +2928,74 @@ app.get("/api/nse/sectoral-rotation", async (req, res) => {
       };
     });
 
-    // If a specific sector is selected, fetch live quotes + cached EOD metrics for its constituents
+    // If a specific sector is selected, fetch live quotes + real cached EOD/Yahoo quotes for its constituents
     let constituents: any[] = [];
     if (selectedSector) {
-      let targetSymbols = sectorConstituentsMap[selectedSector] || [];
-      if (targetSymbols.length === 0) {
-        if (selectedSector === "NIFTY PSU BANK") {
-          targetSymbols = (sectorConstituentsMap["NIFTY BANK"] || []).filter(sym =>
-            ["SBIN", "BANKBARODA", "PNB", "CANBK", "UNIONBANK", "INDIANB", "BANKINDIA", "IOB", "UCOBANK", "MAHABANK", "CENTRALBK"].includes(sym)
-          );
-        } else if (selectedSector === "NIFTY PVT BANK") {
-          targetSymbols = (sectorConstituentsMap["NIFTY BANK"] || []).filter(sym =>
-            !["SBIN", "BANKBARODA", "PNB", "CANBK", "UNIONBANK", "INDIANB", "BANKINDIA", "IOB", "UCOBANK", "MAHABANK", "CENTRALBK"].includes(sym)
-          );
-        } else if (selectedSector === "NIFTY HEALTHCARE") {
-          targetSymbols = sectorConstituentsMap["NIFTY PHARMA"] || [];
-        } else if (selectedSector === "NIFTY ENERGY") {
-          targetSymbols = Array.from(
-            new Set([
-              ...(sectorConstituentsMap["NIFTY ENERGY"] || []),
-              ...(sectorConstituentsMap["NIFTY OIL & GAS"] || [])
-            ])
+      const targetSymbols = resolveSectorConstituents(selectedSector, sectorConstituentsMap);
+      const cappedSymbols = targetSymbols.slice(0, 80);
+      const liveMap = await getNseLiveQuotesForSymbols(cappedSymbols).catch(() => ({} as Record<string, any>));
+
+      // Fill any symbols missing live CM MCP quotes from hydrated EOD cache first, then live Yahoo .NS
+      const quoteBySym: Record<string, { close: number; prevClose: number; perChange: number; volume: number; turnover: number }> = {};
+      const missingForYahoo: string[] = [];
+
+      await Promise.all(
+        cappedSymbols.map(async sym => {
+          const live = liveMap[sym];
+          if (live && live.close > 0) {
+            quoteBySym[sym] = {
+              close: live.close,
+              prevClose: live.prevClose || live.close,
+              perChange: live.perChange || 0,
+              volume: live.volume || 0,
+              turnover: live.turnover || (live.volume && live.close ? live.volume * live.close : 0)
+            };
+            return;
+          }
+          const eod = await getCachedEodQuoteSummary(sym);
+          if (eod && eod.close > 0) {
+            quoteBySym[sym] = eod;
+          } else {
+            missingForYahoo.push(sym);
+          }
+        })
+      );
+
+      if (missingForYahoo.length > 0) {
+        const batchSize = 15;
+        for (let i = 0; i < missingForYahoo.length; i += batchSize) {
+          const chunk = missingForYahoo.slice(i, i + batchSize);
+          await Promise.all(
+            chunk.map(async sym => {
+              const yq = await fetchYahooQuickQuote(sym);
+              if (yq && yq.close > 0) quoteBySym[sym] = yq;
+            })
           );
         }
       }
 
-      const cappedSymbols = targetSymbols.slice(0, 80);
-      const liveMap = await getNseLiveQuotesForSymbols(cappedSymbols).catch(() => ({} as Record<string, any>));
-      constituents = cappedSymbols.map(sym => {
-        const q = liveMap[sym];
-        const ltp = q?.close || 0;
-        const turnoverCr = q?.turnover ? Number((q.turnover / 1e7).toFixed(2)) : (q?.volume && ltp ? Number(((q.volume * ltp) / 1e7).toFixed(2)) : 0);
-        return {
-          symbol: sym,
-          description: descriptions[sym] || sym,
-          industry: industries[sym] || selectedSector,
-          isFno: fnoSet.has(sym),
-          ltp: Number(ltp.toFixed(2)),
-          prevClose: Number((q?.prevClose || ltp).toFixed(2)),
-          changePct: Number((q?.perChange || 0).toFixed(2)),
-          volume: q?.volume || 0,
-          turnoverCr
-        };
-      }).sort((a, b) => b.changePct - a.changePct);
+      constituents = cappedSymbols
+        .map(sym => {
+          const q = quoteBySym[sym];
+          const ltp = q?.close || 0;
+          const turnoverCr = q?.turnover
+            ? Number((q.turnover / 1e7).toFixed(2))
+            : q?.volume && ltp
+            ? Number(((q.volume * ltp) / 1e7).toFixed(2))
+            : 0;
+          return {
+            symbol: sym,
+            description: descriptions[sym] || sym,
+            industry: industries[sym] || selectedSector,
+            isFno: fnoSet.has(sym),
+            ltp: Number(ltp.toFixed(2)),
+            prevClose: Number((q?.prevClose || ltp).toFixed(2)),
+            changePct: Number((q?.perChange || 0).toFixed(2)),
+            volume: q?.volume || 0,
+            turnoverCr
+          };
+        })
+        .sort((a, b) => b.changePct - a.changePct);
     }
 
     res.json({
@@ -3021,15 +3085,21 @@ async function readJsonAuditFileSafe(filePath: string): Promise<HistoricalAuditD
   }
 }
 
+async function writeJsonFileAtomic(filePath: string, jsonStr: string) {
+  const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}`;
+  await fs.writeFile(tmpPath, jsonStr, "utf-8");
+  await fs.rename(tmpPath, filePath);
+}
+
 async function persistMergedAuditFiles(merged: HistoricalAuditDayEntry[], universe: string = "FNO") {
   const cleanUni = universe ? universe.replace(/[^a-zA-Z0-9]/g, "") : "FNO";
   const uniFile = path.join(process.cwd(), `historical_assessments_${cleanUni}.json`);
   const jsonStr = JSON.stringify(merged, null, 2);
 
   // Keep per-universe files strictly isolated so Personal/Nifty500 never clobber canonical FNO
-  const writes = [fs.writeFile(uniFile, jsonStr).catch(() => {})];
+  const writes = [writeJsonFileAtomic(uniFile, jsonStr).catch(() => {})];
   if (cleanUni === "FNO") {
-    writes.push(fs.writeFile(HISTORICAL_ASSESSMENTS_FILE, jsonStr).catch(() => {}));
+    writes.push(writeJsonFileAtomic(HISTORICAL_ASSESSMENTS_FILE, jsonStr).catch(() => {}));
   }
   await Promise.all(writes);
 }
@@ -3075,10 +3145,11 @@ async function getHistoricalAssessments(
   const uniDisk = await readJsonAuditFileSafe(historicalFile);
   const rootDisk = cleanUni === "FNO" ? await readJsonAuditFileSafe(HISTORICAL_ASSESSMENTS_FILE) : [];
 
-  // Merge compiled VERIFIED_AUDIT_BASELINE strictly with this universe's archive
-  let merged = mergeVerifiedAuditLogs(VERIFIED_AUDIT_BASELINE, rootDisk, uniDisk);
+  // Never pollute non-FNO universes with FNO baseline; for FNO only use baseline if disk archive is empty
+  const baseline = cleanUni === "FNO" && uniDisk.length === 0 && rootDisk.length === 0 ? VERIFIED_AUDIT_BASELINE : [];
+  let merged = mergeVerifiedAuditLogs(baseline, rootDisk, uniDisk);
 
-  if (uniDisk.length < merged.length || uniDisk.some(e => !e.isGenuineWalkForward)) {
+  if (merged.length > 0 && (uniDisk.length < merged.length || uniDisk.some(e => !e.isGenuineWalkForward))) {
     await persistMergedAuditFiles(merged, cleanUni);
   }
 
@@ -3089,6 +3160,7 @@ async function getHistoricalAssessments(
   const lastSyncMs = lastIncrementalSyncByUni.get(cleanUni) || 0;
   const shouldCheckIncremental =
     forceIncrementalCheck ||
+    merged.length === 0 ||
     (latestRecordedDate < latestClosedTradingDate && nowMs - lastSyncMs > 15 * 60 * 1000);
 
   let inFlight = incrementalSyncInFlightByUni.get(cleanUni);
@@ -3099,7 +3171,7 @@ async function getHistoricalAssessments(
       try {
         const updated = await computeGenuineWalkForwardAudit(canonicalSymbols, merged, 55);
         const reMerged = mergeVerifiedAuditLogs(merged, updated);
-        if (reMerged.length >= merged.length) {
+        if (reMerged.length > 0) {
           await persistMergedAuditFiles(reMerged, cleanUni);
           return reMerged;
         }
@@ -3119,7 +3191,7 @@ async function getHistoricalAssessments(
     } else {
       merged = await Promise.race([
         inFlight,
-        new Promise<HistoricalAuditDayEntry[]>((resolve) => setTimeout(() => resolve(merged), 1200))
+        new Promise<HistoricalAuditDayEntry[]>((resolve) => setTimeout(() => resolve(merged), 20000))
       ]);
     }
   }
@@ -3129,6 +3201,7 @@ async function getHistoricalAssessments(
 
 app.get("/api/historical-audit", async (req, res) => {
   const universe = (req.query.universe as string) || "FNO";
+  const cleanUni = universe ? universe.replace(/[^a-zA-Z0-9]/g, "") : "FNO";
   const symbolsParam = (req.query.symbols as string) || "";
   const forceSync = req.query.refresh === "true";
   const customSymbols = symbolsParam ? symbolsParam.split(",").map(s => s.trim()).filter(Boolean) : undefined;
@@ -3141,6 +3214,7 @@ app.get("/api/historical-audit", async (req, res) => {
     status: "ok",
     engine: "walk_forward_v2_real",
     latestClosedTradingDate,
+    syncing: Boolean(incrementalSyncInFlightByUni.get(cleanUni)),
     totalSessions: Math.floor(filteredData.length / 2),
     data: [...filteredData].reverse()
   });
@@ -3152,7 +3226,7 @@ app.post("/api/sync-historical-audit", async (req, res) => {
     const clientEntries: HistoricalAuditDayEntry[] = Array.isArray(req.body?.entries) ? req.body.entries : [];
     const serverEntries = await getHistoricalAssessments(universe);
 
-    const unified = mergeVerifiedAuditLogs(VERIFIED_AUDIT_BASELINE, serverEntries, clientEntries);
+    const unified = mergeVerifiedAuditLogs(clientEntries, serverEntries);
     await persistMergedAuditFiles(unified, universe);
 
     const latestClosedTradingDate = getLatestExpectedClosedTradingDateIST(new Date());
@@ -3418,7 +3492,7 @@ app.post("/api/finalize-eod", async (req, res) => {
     data.push(newEntry);
   }
 
-  const merged = mergeVerifiedAuditLogs(VERIFIED_AUDIT_BASELINE, data);
+  const merged = mergeVerifiedAuditLogs(data);
   await persistMergedAuditFiles(merged, universe);
   res.json({ status: "ok", entry: newEntry, totalEntries: merged.length });
 });
@@ -3433,9 +3507,9 @@ async function persistMergedLayaPreTurnAuditFiles(merged: HistoricalAuditDayEntr
   const uniFile = path.join(process.cwd(), `historical_laya_preturn_assessments_${cleanUni}.json`);
   const jsonStr = JSON.stringify(merged, null, 2);
 
-  const writes = [fs.writeFile(uniFile, jsonStr).catch(() => {})];
+  const writes = [writeJsonFileAtomic(uniFile, jsonStr).catch(() => {})];
   if (cleanUni === "FNO") {
-    writes.push(fs.writeFile(LAYA_PRETURN_ASSESSMENTS_FILE, jsonStr).catch(() => {}));
+    writes.push(writeJsonFileAtomic(LAYA_PRETURN_ASSESSMENTS_FILE, jsonStr).catch(() => {}));
   }
   await Promise.all(writes);
 }
@@ -3451,9 +3525,10 @@ async function getLayaPreTurnHistoricalAssessments(
   const uniDisk = await readJsonAuditFileSafe(historicalFile);
   const rootDisk = cleanUni === "FNO" ? await readJsonAuditFileSafe(LAYA_PRETURN_ASSESSMENTS_FILE) : [];
 
-  let merged = mergeVerifiedAuditLogs(VERIFIED_LAYA_PRETURN_AUDIT_BASELINE, rootDisk, uniDisk);
+  const baseline = cleanUni === "FNO" && uniDisk.length === 0 && rootDisk.length === 0 ? VERIFIED_LAYA_PRETURN_AUDIT_BASELINE : [];
+  let merged = mergeVerifiedAuditLogs(baseline, rootDisk, uniDisk);
 
-  if (uniDisk.length < merged.length || uniDisk.some(e => !e.isGenuineWalkForward)) {
+  if (merged.length > 0 && (uniDisk.length < merged.length || uniDisk.some(e => !e.isGenuineWalkForward))) {
     await persistMergedLayaPreTurnAuditFiles(merged, cleanUni);
   }
 
@@ -3464,6 +3539,7 @@ async function getLayaPreTurnHistoricalAssessments(
   const lastSyncMs = lastLayaPreTurnSyncByUni.get(cleanUni) || 0;
   const shouldCheckIncremental =
     forceIncrementalCheck ||
+    merged.length === 0 ||
     (latestRecordedDate < latestClosedTradingDate && nowMs - lastSyncMs > 15 * 60 * 1000);
 
   let inFlight = layaPreTurnSyncInFlightByUni.get(cleanUni);
@@ -3474,7 +3550,7 @@ async function getLayaPreTurnHistoricalAssessments(
       try {
         const updated = await computeLayaPreTurnWalkForwardAudit(canonicalSymbols, merged, 55);
         const reMerged = mergeVerifiedAuditLogs(merged, updated);
-        if (reMerged.length >= merged.length) {
+        if (reMerged.length > 0) {
           await persistMergedLayaPreTurnAuditFiles(reMerged, cleanUni);
           return reMerged;
         }
@@ -3494,7 +3570,7 @@ async function getLayaPreTurnHistoricalAssessments(
     } else {
       merged = await Promise.race([
         inFlight,
-        new Promise<HistoricalAuditDayEntry[]>((resolve) => setTimeout(() => resolve(merged), 1200))
+        new Promise<HistoricalAuditDayEntry[]>((resolve) => setTimeout(() => resolve(merged), 20000))
       ]);
     }
   }
@@ -3504,6 +3580,7 @@ async function getLayaPreTurnHistoricalAssessments(
 
 app.get("/api/laya-preturn-audit", async (req, res) => {
   const universe = (req.query.universe as string) || "FNO";
+  const cleanUni = universe ? universe.replace(/[^a-zA-Z0-9]/g, "") : "FNO";
   const symbolsParam = (req.query.symbols as string) || "";
   const forceSync = req.query.refresh === "true";
   const customSymbols = symbolsParam ? symbolsParam.split(",").map(s => s.trim()).filter(Boolean) : undefined;
@@ -3516,6 +3593,7 @@ app.get("/api/laya-preturn-audit", async (req, res) => {
     status: "ok",
     engine: "laya_preturn_walk_forward_v2",
     latestClosedTradingDate,
+    syncing: Boolean(layaPreTurnSyncInFlightByUni.get(cleanUni)),
     totalSessions: Math.floor(filteredData.length / 2),
     data: [...filteredData].reverse()
   });
@@ -3527,7 +3605,7 @@ app.post("/api/sync-laya-preturn-audit", async (req, res) => {
     const clientEntries: HistoricalAuditDayEntry[] = Array.isArray(req.body?.entries) ? req.body.entries : [];
     const serverEntries = await getLayaPreTurnHistoricalAssessments(universe);
 
-    const unified = mergeVerifiedAuditLogs(VERIFIED_LAYA_PRETURN_AUDIT_BASELINE, serverEntries, clientEntries);
+    const unified = mergeVerifiedAuditLogs(clientEntries, serverEntries);
     await persistMergedLayaPreTurnAuditFiles(unified, universe);
 
     const latestClosedTradingDate = getLatestExpectedClosedTradingDateIST(new Date());
@@ -3568,7 +3646,7 @@ app.post("/api/finalize-laya-preturn-eod", async (req, res) => {
     data.push(newEntry);
   }
 
-  const merged = mergeVerifiedAuditLogs(VERIFIED_LAYA_PRETURN_AUDIT_BASELINE, data);
+  const merged = mergeVerifiedAuditLogs(data);
   await persistMergedLayaPreTurnAuditFiles(merged, universe);
   res.json({ status: "ok", entry: newEntry, totalEntries: merged.length });
 });
@@ -3601,13 +3679,11 @@ cron.schedule('45 8 * * 1-5', async () => {
 });
 
 async function startServer() {
-  // Hydrate disk-persisted Bhavcopy EOD cache immediately for instant cold starts
-  await ensureNseEodDiskCacheLoaded().catch(() => {});
+  // Start hydrating disk-persisted Bhavcopy EOD cache immediately without blocking port 3000 bind
+  ensureNseEodDiskCacheLoaded().catch(() => {});
 
   // Warm official NSE F&O / Nifty 500 lists (with Industry tags) & Market Mood in background on boot
-  refreshNseWatchlists(false).catch(err => {
-    console.warn("[NSE Universe Sync] Startup sync deferred:", err?.message || err);
-  });
+  refreshNseWatchlists(false).catch(() => {});
   getNseMarketMood(false)
     .then(mood => {
       if (mood) {
@@ -3650,6 +3726,11 @@ async function startServer() {
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`[Quant SWT] Core server running at http://localhost:${PORT}`);
+    // Pre-warm FNO walk-forward audits in background immediately after binding port 3000
+    setTimeout(() => {
+      getHistoricalAssessments("FNO", undefined, false).catch(() => {});
+      getLayaPreTurnHistoricalAssessments("FNO", undefined, false).catch(() => {});
+    }, 1500);
   });
 }
 

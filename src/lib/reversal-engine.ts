@@ -132,7 +132,7 @@ export function getRowReversalTrade(row: ScreenerMetrics, timeframe: string): Re
   // Discrete DQN discrete state values and PPO policy ratio variables for reporting
   const ppoValue = action === "WAIT" ? 0.2854 : (0.6215 + (confidence / 280));
   const dqnQValue = action === "REV BUY" || action === "REV SELL" || action === "B-Early Rev" || action === "S-Early Rev" ? 0.8924 : (action === "TRAP" ? -0.7321 : 0.1852);
-  const driftScore = Math.random() * 0.05 + 0.01; // < 10% drift
+  const driftScore = Math.min(0.085, Math.max(0.01, Math.abs(wtDiff) / 800 + Math.max(0, 100 - winRate) / 2500));
 
   return {
     action,

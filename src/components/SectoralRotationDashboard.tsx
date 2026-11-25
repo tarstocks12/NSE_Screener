@@ -152,10 +152,23 @@ export default function SectoralRotationDashboard({
       const qs = new URLSearchParams();
       if (force) qs.set("refresh", "1");
       if (sectorToLoad) qs.set("sector", sectorToLoad);
-      const [rotJson, moversJson] = await Promise.all([
-        safeFetchJson(`/api/nse/sectoral-rotation${qs.toString() ? `?${qs.toString()}` : ""}`),
-        safeFetchJson("/api/nse/market-movers?limit=12").catch(() => null)
-      ]);
+      const url = `/api/nse/sectoral-rotation${qs.toString() ? `?${qs.toString()}` : ""}`;
+
+      let rotJson: any = null;
+      let moversJson: any = null;
+      try {
+        [rotJson, moversJson] = await Promise.all([
+          safeFetchJson(url),
+          safeFetchJson("/api/nse/market-movers?limit=12").catch(() => null)
+        ]);
+      } catch {
+        // Automatic single retry after brief delay for transient network/cold-start hiccups
+        await new Promise(resolve => setTimeout(resolve, 1200));
+        [rotJson, moversJson] = await Promise.all([
+          safeFetchJson(url),
+          safeFetchJson("/api/nse/market-movers?limit=12").catch(() => null)
+        ]);
+      }
 
       if (rotJson?.status === "ok" && rotJson.data) {
         const nextSectors: SectoralHeatmapItem[] = rotJson.data.sectors || [];

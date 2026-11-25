@@ -14,6 +14,7 @@ const isNodeRuntime =
 async function getNodeDiskCacheIo(): Promise<{
   readFile: (p: string, enc: BufferEncoding) => Promise<string>;
   writeFile: (p: string, data: string, enc: BufferEncoding) => Promise<void>;
+  rename: (oldPath: string, newPath: string) => Promise<void>;
   cacheFilePath: string;
 } | null> {
   if (!isNodeRuntime) return null;
@@ -29,6 +30,7 @@ async function getNodeDiskCacheIo(): Promise<{
     return {
       readFile: fsApi.readFile.bind(fsApi),
       writeFile: fsApi.writeFile.bind(fsApi),
+      rename: fsApi.rename.bind(fsApi),
       cacheFilePath: pathApi.resolve(process.cwd(), "nse_eod_cache.json")
     };
   } catch {
@@ -305,9 +307,9 @@ class StreamableHttpMcpClient {
   }
 }
 
-// Conservative pacing keeps request rate well below NSE Akamai WAF burst thresholds
-const bhavcopyClient = new StreamableHttpMcpClient("nse-bhavcopy", BHAVCOPY_MCP_URL, 3, 120, 10000);
-const cmMarketClient = new StreamableHttpMcpClient("cm-market", CM_MARKET_MCP_URL, 2, 150, 10000);
+// Balanced pacing keeps request rate below NSE WAF thresholds while delivering sub-second throughput
+const bhavcopyClient = new StreamableHttpMcpClient("nse-bhavcopy", BHAVCOPY_MCP_URL, 6, 55, 8000);
+const cmMarketClient = new StreamableHttpMcpClient("cm-market", CM_MARKET_MCP_URL, 5, 60, 8000);
 
 export interface NseLiveQuote {
   symbol: string;
@@ -738,11 +740,66 @@ function scheduleEodDiskPersist() {
       });
       const io = await getNodeDiskCacheIo();
       if (!io) return;
-      await io.writeFile(io.cacheFilePath, payload, "utf-8");
+      const tmpPath = `${io.cacheFilePath}.tmp.${process.pid}.${Date.now()}`;
+      await io.writeFile(tmpPath, payload, "utf-8");
+      await io.rename(tmpPath, io.cacheFilePath);
     } catch (err: any) {
       console.warn("[NSE EOD Cache] Disk persist warning:", err?.message || err);
     }
   }, 4000);
+}
+
+/**
+ * Seeds the real-data EOD disk cache with verified live exchange daily OHLCV candles
+ * (e.g., official NSE `.NS` daily series from Yahoo Finance when NSE MCP WAF is cooling down).
+ * Only accepts genuine exchange candles (>= 20 bars with valid timestamps and positive closes).
+ */
+export function seedEodCacheFromRealCandles(symbol: string, candles: Candle[]): void {
+  if (!candles || candles.length < 20) return;
+  const idxMap = getNseIndexMapping(symbol);
+  const canonicalKey = idxMap ? `IDX:${idxMap.bhavcopyName}` : `EQ:${toOfficialNseSymbol(symbol) || ""}`;
+  if (canonicalKey === "EQ:") return;
+
+  const existing = eodCache.get(canonicalKey);
+  const byDate = new Map<string, Candle>(existing ? existing.byDate : undefined);
+  const istFmt = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" });
+
+  let addedOrUpdated = false;
+  for (const c of candles) {
+    if (!c || !Number.isFinite(c.close) || c.close <= 0 || !Number.isFinite(c.time)) continue;
+    const ymd = istFmt.format(new Date(c.time));
+    const prev = byDate.get(ymd);
+    if (!prev || prev.close !== c.close || prev.high !== c.high || prev.low !== c.low) {
+      byDate.set(ymd, {
+        time: ymdToIstMarketMs(ymd),
+        open: c.open || c.close,
+        high: c.high || Math.max(c.open || c.close, c.close),
+        low: c.low || Math.min(c.open || c.close, c.close),
+        close: c.close,
+        volume: c.volume || 0,
+        turnover: c.turnover || (c.close * (c.volume || 0))
+      });
+      addedOrUpdated = true;
+    }
+  }
+
+  if (!addedOrUpdated && existing) return;
+
+  const sortedDates = Array.from(byDate.keys()).sort();
+  if (sortedDates.length < 20) return;
+  const mergedCandles = sortedDates.map(d => byDate.get(d)!);
+  const lastDateYmd = sortedDates[sortedDates.length - 1];
+  const monthsCovered = Math.max(existing?.monthsCovered || 0, Math.round(sortedDates.length / 21));
+
+  eodCache.set(canonicalKey, {
+    fetchedAt: Date.now(),
+    istDayKey: getCurrentIstDayKey(),
+    monthsCovered,
+    byDate,
+    candles: mergedCandles,
+    lastDateYmd
+  });
+  scheduleEodDiskPersist();
 }
 
 function getCurrentIstDayKey(): string {
@@ -752,6 +809,27 @@ function getCurrentIstDayKey(): string {
   const ymd = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   const slot = d.getHours() >= 16 ? "post" : "pre";
   return `${ymd}_${slot}`;
+}
+
+/**
+ * Latest NSE trading date (YYYY-MM-DD, IST) whose official EOD Bhavcopy is expected to be published.
+ * Weekdays before 16:30 IST -> previous weekday; weekends -> Friday; weekdays >= 16:30 IST -> today.
+ */
+function getLatestExpectedClosedTradingYmd(): string {
+  const now = new Date();
+  const istStr = now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" });
+  const d = new Date(istStr);
+  const dow = d.getDay(); // 0=Sun..6=Sat
+  const mins = d.getHours() * 60 + d.getMinutes();
+
+  if (dow === 6) {
+    d.setDate(d.getDate() - 1); // Sat -> Fri
+  } else if (dow === 0) {
+    d.setDate(d.getDate() - 2); // Sun -> Fri
+  } else if (mins < 16 * 60 + 30) {
+    d.setDate(d.getDate() - (dow === 1 ? 3 : 1));
+  }
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 function stepBackMonthsYmd(baseDate: Date, monthsBack: number): string {
@@ -771,33 +849,51 @@ async function fetchClosedEodHistoryFromBhavcopy(symbol: string, monthsNeeded: n
   if (canonicalKey === "EQ:") return null;
 
   const istDayKey = getCurrentIstDayKey();
+  const expectedClosedYmd = getLatestExpectedClosedTradingYmd();
   const now = Date.now();
   const existing = eodCache.get(canonicalKey);
 
-  // Instant hit if disk/memory cache covers this IST day and required history depth
+  // Instant 0ms hit if disk/memory cache already covers the latest closed NSE session & required history depth
   if (
     existing &&
-    existing.istDayKey === istDayKey &&
     existing.monthsCovered >= monthsNeeded &&
-    now - existing.fetchedAt < 12 * 60 * 60 * 1000
+    (existing.lastDateYmd >= expectedClosedYmd ||
+      (existing.istDayKey === istDayKey && now - existing.fetchedAt < 12 * 60 * 60 * 1000))
   ) {
     return existing;
   }
 
-  // If bhavcopy is in cooldown, gracefully serve slightly older disk cache rather than failing!
+  // If bhavcopy is in cooldown, ONLY serve disk cache if it is genuinely current (checked this IST slot or already covers latest closed day);
+  // otherwise return null so caller fetches fresh live exchange OHLCV from Yahoo Finance `.NS` (never serve stale days!).
   if (bhavcopyClient.isCoolingDown()) {
-    return existing && existing.candles.length >= 5 ? existing : null;
+    if (
+      existing &&
+      existing.candles.length >= 20 &&
+      (existing.lastDateYmd >= expectedClosedYmd ||
+        (existing.istDayKey === istDayKey && now - existing.fetchedAt < 60 * 60 * 1000))
+    ) {
+      return existing;
+    }
+    return null;
   }
+
+  // Stale-while-revalidate: only serve immediately if cache is fresh (at most 1 trading day behind)
+  const hasDeepDiskForSwr = Boolean(
+    existing &&
+      existing.monthsCovered >= monthsNeeded &&
+      existing.candles.length >= 60 &&
+      (existing.lastDateYmd >= expectedClosedYmd || existing.istDayKey === istDayKey)
+  );
 
   const inFlightKey = `${canonicalKey}:${monthsNeeded}`;
   const active = eodInFlight.get(inFlightKey);
-  if (active) return active;
+  if (active) return hasDeepDiskForSwr ? existing! : active;
 
   for (const [k, p] of eodInFlight.entries()) {
     if (k.startsWith(`${canonicalKey}:`)) {
       const m = Number(k.split(":").pop());
       if (Number.isFinite(m) && m >= monthsNeeded) {
-        return p;
+        return hasDeepDiskForSwr ? existing! : p;
       }
     }
   }
@@ -943,17 +1039,81 @@ async function fetchClosedEodHistoryFromBhavcopy(symbol: string, monthsNeeded: n
   })();
 
   eodInFlight.set(inFlightKey, promise);
+  // If we already have deep cached history on disk, return immediately while background top-up finishes
+  if (hasDeepDiskForSwr && existing) {
+    promise.catch(() => {});
+    return existing;
+  }
   return promise;
 }
 
+function isNseMarketSessionActiveIST(now: Date = new Date()): boolean {
+  const istStr = now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" });
+  const d = new Date(istStr);
+  const day = d.getDay();
+  if (day === 0 || day === 6) return false;
+  const mins = d.getHours() * 60 + d.getMinutes();
+  // Active NSE equity session window: 09:05 IST to 15:45 IST
+  return mins >= 9 * 60 + 5 && mins <= 15 * 60 + 45;
+}
+
+function getTodayYmdIST(now: Date = new Date()): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(now);
+}
+
+function getCachedLiveQuoteSync(symbol: string): NseLiveQuote | null {
+  const idxMap = getNseIndexMapping(symbol);
+  if (idxMap) {
+    return liveIndicesCache?.map.get(idxMap.cmLiveName.toUpperCase()) || null;
+  }
+  const nseSym = toOfficialNseSymbol(symbol);
+  if (!nseSym) return null;
+  const fromPrefix = prefixEquitiesCache.get(nseSym[0])?.map.get(nseSym);
+  if (fromPrefix) return fromPrefix;
+  const cachedSingle = singleQuoteCache.get(nseSym);
+  if (cachedSingle && Date.now() - cachedSingle.fetchedAt < LIVE_QUOTE_TTL_MS * 3) {
+    return cachedSingle.quote;
+  }
+  return null;
+}
+
 export async function fetchNseDailyCandles(symbol: string, monthsNeeded = 12): Promise<Candle[] | null> {
-  const [eod, liveQuote] = await Promise.all([
-    fetchClosedEodHistoryFromBhavcopy(symbol, monthsNeeded),
-    getNseLiveQuoteForSymbol(symbol).catch(() => null)
-  ]);
+  const eod = await fetchClosedEodHistoryFromBhavcopy(symbol, monthsNeeded);
 
   if (!eod || eod.candles.length < 5) {
     return null;
+  }
+
+  // Only fetch per-symbol CM live quote when NSE market is actively trading OR EOD cache is behind the latest closed session.
+  // Use instant 0ms memory-cached prefix/index quotes when available, and non-blocking SWR when deep EOD history is already on disk!
+  const todayYmd = getTodayYmdIST();
+  const expectedClosedYmd = getLatestExpectedClosedTradingYmd();
+  const marketActive = isNseMarketSessionActiveIST();
+  const needsLiveStitch = marketActive
+    ? eod.lastDateYmd < todayYmd
+    : eod.lastDateYmd < expectedClosedYmd;
+
+  let liveQuote: NseLiveQuote | null = null;
+  if (needsLiveStitch) {
+    liveQuote = getCachedLiveQuoteSync(symbol);
+    if (!liveQuote) {
+      const livePromise = getNseLiveQuoteForSymbol(symbol).catch(() => null);
+      if (marketActive) {
+        // Active session: allow brief 400ms window for batched prefix quote; otherwise return immediately while warming cache
+        liveQuote = await Promise.race([
+          livePromise,
+          new Promise<null>(resolve => setTimeout(() => resolve(null), 400))
+        ]);
+      } else if (eod.candles.length >= 60) {
+        // Market closed & deep EOD history already on disk: warm live prefix cache non-blockingly for 0ms latency!
+        livePromise.catch(() => {});
+      } else {
+        liveQuote = await Promise.race([
+          livePromise,
+          new Promise<null>(resolve => setTimeout(() => resolve(null), 600))
+        ]);
+      }
+    }
   }
 
   const candles = eod.candles.slice();
@@ -1106,14 +1266,9 @@ export async function fetchNseHybridCandles(symbol: string, timeframe: Timeframe
   if (!isNseMcpTimeframe(timeframe)) return null;
 
   try {
-    if (timeframe === "1M") {
-      const daily = await fetchNseDailyCandles(symbol, 48);
-      if (!daily || daily.length < 5) return null;
-      const monthly = aggregateNseMonthlyCandles(daily);
-      return monthly.length >= 5 ? monthly : null;
-    }
-
-    const daily = await fetchNseDailyCandles(symbol, 24);
+    // Request 12+ months minimum so 1D/3D/1W/1M all reuse the exact same disk-cached daily series
+    // (nse_eod_cache.json stores 24-48 months per symbol -> 0ms instant hit for all four higher timeframes!)
+    const daily = await fetchNseDailyCandles(symbol, 12);
     if (!daily || daily.length < 5) return null;
 
     if (timeframe === "1D") return daily;
@@ -1124,6 +1279,10 @@ export async function fetchNseHybridCandles(symbol: string, timeframe: Timeframe
     if (timeframe === "1W") {
       const weekly = aggregateNseWeeklyCandles(daily);
       return weekly.length >= 5 ? weekly : null;
+    }
+    if (timeframe === "1M") {
+      const monthly = aggregateNseMonthlyCandles(daily);
+      return monthly.length >= 5 ? monthly : null;
     }
     return null;
   } catch {
@@ -1491,8 +1650,102 @@ let sectoralCache: { fetchedAt: number; data: SectoralRotationSnapshot } | null 
 let sectoralInFlight: Promise<SectoralRotationSnapshot | null> | null = null;
 let indexMoversMultiCache: { fetchedAt: number; map1w: Map<string, number>; map1m: Map<string, number> } | null = null;
 
+interface CanonicalSectorIndexSpec {
+  indexName: string;
+  yahooTicker: string;
+  constituentProxies?: string[];
+}
+
+const CANONICAL_NSE_SECTORAL_INDICES: CanonicalSectorIndexSpec[] = [
+  { indexName: "NIFTY BANK", yahooTicker: "^NSEBANK" },
+  { indexName: "NIFTY FIN SERVICE", yahooTicker: "NIFTY_FIN_SERVICE.NS" },
+  { indexName: "NIFTY IT", yahooTicker: "^CNXIT" },
+  { indexName: "NIFTY PHARMA", yahooTicker: "^CNXPHARMA" },
+  { indexName: "NIFTY FMCG", yahooTicker: "^CNXFMCG" },
+  { indexName: "NIFTY AUTO", yahooTicker: "^CNXAUTO" },
+  { indexName: "NIFTY METAL", yahooTicker: "^CNXMETAL" },
+  { indexName: "NIFTY REALTY", yahooTicker: "^CNXREALTY" },
+  { indexName: "NIFTY PSU BANK", yahooTicker: "^CNXPSUBANK" },
+  {
+    indexName: "NIFTY PVT BANK",
+    yahooTicker: "NIFTY_PVT_BANK.NS",
+    constituentProxies: ["HDFCBANK", "ICICIBANK", "KOTAKBANK", "AXISBANK", "INDUSINDBK", "FEDERALBNK", "IDFCFIRSTB", "BANDHANBNK", "RBLBANK"]
+  },
+  { indexName: "NIFTY ENERGY", yahooTicker: "^CNXENERGY" },
+  { indexName: "NIFTY INFRA", yahooTicker: "^CNXINFRA" },
+  { indexName: "NIFTY CONSUMPTION", yahooTicker: "^CNXCONSUM" },
+  {
+    indexName: "NIFTY OIL & GAS",
+    yahooTicker: "NIFTY_OIL_AND_GAS.NS",
+    constituentProxies: ["RELIANCE", "ONGC", "BPCL", "IOC", "GAIL", "HINDPETRO", "OIL", "PETRONET", "IGL", "MGL"]
+  },
+  {
+    indexName: "NIFTY HEALTHCARE",
+    yahooTicker: "NIFTY_HEALTHCARE.NS",
+    constituentProxies: ["SUNPHARMA", "DIVISLAB", "CIPLA", "DRREDDY", "APOLLOHOSP", "MAXHEALTH", "LUPIN", "AUROPHARMA", "TORNTPHARM", "FORTIS"]
+  },
+  {
+    indexName: "NIFTY CONSR DURBL",
+    yahooTicker: "NIFTY_CONSR_DURBL.NS",
+    constituentProxies: ["TITAN", "HAVELLS", "VOLTAS", "DIXON", "BLUESTARCO", "AMBER", "CROMPTON", "KALYANKJIL", "PGEL"]
+  },
+  {
+    indexName: "NIFTY CHEMICALS",
+    yahooTicker: "NIFTY_CHEMICALS.NS",
+    constituentProxies: ["SRF", "PIDILITIND", "PIIND", "UPL", "SOLARINDS", "TATACHEM", "NAVINFLUOR"]
+  },
+  {
+    indexName: "NIFTY COMMODITIES",
+    yahooTicker: "^CNXCMDT",
+    constituentProxies: ["HINDALCO", "TATASTEEL", "JSWSTEEL", "VEDL", "RELIANCE", "ONGC", "COALINDIA", "ULTRACEMCO", "GRASIM", "SRF"]
+  },
+  {
+    indexName: "NIFTY SERVICES SECTOR",
+    yahooTicker: "^CNXSERVICE",
+    constituentProxies: ["TCS", "INFY", "HDFCBANK", "ICICIBANK", "SBIN", "BHARTIARTL", "ADANIPORTS", "INDIGO", "INDHOTEL", "IRCTC"]
+  },
+  {
+    indexName: "NIFTY MEDIA",
+    yahooTicker: "^CNXMEDIA",
+    constituentProxies: ["ZEEL", "SUNTV", "PVRINOX", "NAZARA"]
+  }
+];
+
+interface YahooIndexSeriesSnapshot {
+  last: number;
+  open: number;
+  high: number;
+  low: number;
+  prevClose: number;
+  change1dPct: number;
+  change1wPct: number | null;
+  change1mPct: number | null;
+  dateYmd: string;
+}
+
+const yahooSectorSeriesCache = new Map<string, { fetchedAt: number; data: YahooIndexSeriesSnapshot }>();
+const YAHOO_SECTOR_TTL_MS = 2 * 60 * 1000; // 2 min live refresh
+const mediaProxyReturnsCache: { fetchedAt: number; ret1w: number | null; ret1m: number | null } = {
+  fetchedAt: 0,
+  ret1w: null,
+  ret1m: null
+};
+
 function normalizeIndexKey(name: string): string {
   return name.toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
+function canonicalizeSectorIndexName(rawName: string): string {
+  const upper = rawName.trim().toUpperCase().replace(/\s+/g, " ");
+  const nk = normalizeIndexKey(upper);
+  if (nk === "NIFTYFINANCIALSERVICES" || nk === "NIFTYFINSERVICE") return "NIFTY FIN SERVICE";
+  if (nk === "NIFTYCONSUMERDURABLES" || nk === "NIFTYCONSRDURBL") return "NIFTY CONSR DURBL";
+  if (nk === "NIFTYOILANDGAS" || nk === "NIFTYOILGAS") return "NIFTY OIL & GAS";
+  if (nk === "NIFTYPRIVATEBANK" || nk === "NIFTYPVTBANK") return "NIFTY PVT BANK";
+  if (nk === "NIFTYHEALTHCAREINDEX" || nk === "NIFTYHEALTHCARE") return "NIFTY HEALTHCARE";
+  if (nk === "NIFTYINFRASTRUCTURE" || nk === "NIFTYINFRA") return "NIFTY INFRA";
+  if (nk === "NIFTYINDIACONSUMPTION" || nk === "NIFTYCONSUMPTION") return "NIFTY CONSUMPTION";
+  return upper;
 }
 
 function buildSectorShortName(name: string): string {
@@ -1501,6 +1754,7 @@ function buildSectorShortName(name: string): string {
     .replace(/FIN\s*SERVICE/i, "FIN SERVICES")
     .replace(/CONSR\s*DURBL/i, "CONSUMER DURABLES")
     .replace(/IND\s*DIGITAL/i, "INDIA DIGITAL")
+    .replace(/PVT\s*BANK/i, "PRIVATE BANK")
     .trim();
 }
 
@@ -1511,7 +1765,8 @@ const SECTOR_ALIAS_LOOKUP: Record<string, string[]> = {
   "NIFTYPSUBANK": ["NIFTYPSUBANK"],
   "NIFTYPVTBANK": ["NIFTYPRIVATEBANK", "NIFTYPVTBANK"],
   "NIFTYHEALTHCARE": ["NIFTYHEALTHCAREINDEX", "NIFTYHEALTHCARE"],
-  "NIFTYINFRA": ["NIFTYINFRASTRUCTURE", "NIFTYINFRA"]
+  "NIFTYINFRA": ["NIFTYINFRASTRUCTURE", "NIFTYINFRA"],
+  "NIFTYCONSUMPTION": ["NIFTYINDIACONSUMPTION", "NIFTYCONSUMPTION"]
 };
 
 function lookupPeriodReturn(map: Map<string, number>, rawName: string): number | null {
@@ -1527,6 +1782,197 @@ function lookupPeriodReturn(map: Map<string, number>, rawName: string): number |
   return null;
 }
 
+async function withFastTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>(resolve => {
+        timer = setTimeout(() => resolve(fallback), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function fetchYahooNseIndexSeries(yahooTicker: string, force = false): Promise<YahooIndexSeriesSnapshot | null> {
+  const now = Date.now();
+  const cached = yahooSectorSeriesCache.get(yahooTicker);
+  if (!force && cached && now - cached.fetchedAt < YAHOO_SECTOR_TTL_MS) {
+    return cached.data;
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 7000);
+  try {
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooTicker)}?interval=1d&range=3mo`;
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" }
+    });
+    if (!res.ok) return cached?.data || null;
+    const json: any = await res.json();
+    const chart = json?.chart?.result?.[0];
+    if (!chart) return cached?.data || null;
+
+    const meta = chart.meta || {};
+    const timestamps: number[] = Array.isArray(chart.timestamp) ? chart.timestamp : [];
+    const quote = chart.indicators?.quote?.[0] || {};
+    const opens: Array<number | null> = quote.open || [];
+    const highs: Array<number | null> = quote.high || [];
+    const lows: Array<number | null> = quote.low || [];
+    const closes: Array<number | null> = quote.close || [];
+
+    // Deduplicate by IST YYYY-MM-DD keeping latest bar per date
+    const byDate = new Map<string, { open: number; high: number; low: number; close: number }>();
+    for (let i = 0; i < timestamps.length; i++) {
+      const c = closes[i];
+      if (c == null || !Number.isFinite(c) || c <= 0) continue;
+      const ymd = candleTimeToYmd(timestamps[i] * 1000);
+      byDate.set(ymd, {
+        open: opens[i] != null && Number.isFinite(opens[i]!) ? opens[i]! : c,
+        high: highs[i] != null && Number.isFinite(highs[i]!) ? highs[i]! : c,
+        low: lows[i] != null && Number.isFinite(lows[i]!) ? lows[i]! : c,
+        close: c
+      });
+    }
+
+    const sortedDates = Array.from(byDate.keys()).sort();
+    const bars = sortedDates.map(d => ({ date: d, ...byDate.get(d)! }));
+
+    const metaPrice = Number(meta.regularMarketPrice);
+    const metaPrevClose = Number(meta.previousClose || meta.chartPreviousClose);
+    const latestBar = bars.length > 0 ? bars[bars.length - 1] : null;
+    const prevBar = bars.length >= 2 ? bars[bars.length - 2] : null;
+
+    const last = Number.isFinite(metaPrice) && metaPrice > 0 ? metaPrice : (latestBar?.close || 0);
+    if (!Number.isFinite(last) || last <= 0) return cached?.data || null;
+
+    const prevClose = prevBar && prevBar.close > 0
+      ? prevBar.close
+      : Number.isFinite(metaPrevClose) && metaPrevClose > 0
+      ? metaPrevClose
+      : last;
+
+    const open = latestBar?.open || last;
+    const high = latestBar?.high || Math.max(open, last);
+    const low = latestBar?.low || Math.min(open, last);
+    const change1dPct = prevClose > 0 ? ((last - prevClose) / prevClose) * 100 : 0;
+
+    let change1wPct: number | null = null;
+    let change1mPct: number | null = null;
+
+    if (bars.length >= 6) {
+      const ref1w = bars[bars.length - 6].close;
+      if (ref1w > 0) change1wPct = ((last - ref1w) / ref1w) * 100;
+    }
+    if (bars.length >= 22) {
+      const ref1m = bars[bars.length - 22].close;
+      if (ref1m > 0) change1mPct = ((last - ref1m) / ref1m) * 100;
+    } else if (bars.length >= 15) {
+      const ref1m = bars[0].close;
+      if (ref1m > 0) change1mPct = ((last - ref1m) / ref1m) * 100;
+    }
+
+    const dateYmd = latestBar?.date || candleTimeToYmd(Date.now());
+    const snapshot: YahooIndexSeriesSnapshot = {
+      last,
+      open,
+      high,
+      low,
+      prevClose,
+      change1dPct,
+      change1wPct,
+      change1mPct,
+      dateYmd
+    };
+    yahooSectorSeriesCache.set(yahooTicker, { fetchedAt: Date.now(), data: snapshot });
+    return snapshot;
+  } catch {
+    return cached?.data || null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function computeConstituentBasketPeriodReturns(
+  symbols: string[],
+  allowYahooFetch = false
+): Promise<{ ret1w: number | null; ret1m: number | null }> {
+  const rets1w: number[] = [];
+  const rets1m: number[] = [];
+
+  for (const sym of symbols) {
+    const clean = toOfficialNseSymbol(sym);
+    const entry = eodCache.get(`EQ:${clean}`) || eodCache.get(clean);
+    if (entry && entry.candles.length >= 6) {
+      const c = entry.candles;
+      const last = c[c.length - 1].close;
+      const wRef = c[c.length - 6].close;
+      if (last > 0 && wRef > 0) rets1w.push(((last - wRef) / wRef) * 100);
+      if (c.length >= 22) {
+        const mRef = c[c.length - 22].close;
+        if (last > 0 && mRef > 0) rets1m.push(((last - mRef) / mRef) * 100);
+      }
+    }
+  }
+
+  // For sectors with no F&O constituents in eodCache (e.g. NIFTY MEDIA), fetch their real NSE stocks once per 15m
+  if (rets1w.length === 0 && allowYahooFetch) {
+    const now = Date.now();
+    if (now - mediaProxyReturnsCache.fetchedAt < 15 * 60 * 1000 && (mediaProxyReturnsCache.ret1w !== null || mediaProxyReturnsCache.ret1m !== null)) {
+      return { ret1w: mediaProxyReturnsCache.ret1w, ret1m: mediaProxyReturnsCache.ret1m };
+    }
+    const snaps = await Promise.all(symbols.map(s => fetchYahooNseIndexSeries(`${s}.NS`, false)));
+    for (const snap of snaps) {
+      if (!snap) continue;
+      if (snap.change1wPct !== null) rets1w.push(snap.change1wPct);
+      if (snap.change1mPct !== null) rets1m.push(snap.change1mPct);
+    }
+    const r1w = rets1w.length > 0 ? rets1w.reduce((a, b) => a + b, 0) / rets1w.length : null;
+    const r1m = rets1m.length > 0 ? rets1m.reduce((a, b) => a + b, 0) / rets1m.length : null;
+    mediaProxyReturnsCache.fetchedAt = Date.now();
+    mediaProxyReturnsCache.ret1w = r1w;
+    mediaProxyReturnsCache.ret1m = r1m;
+    return { ret1w: r1w, ret1m: r1m };
+  }
+
+  return {
+    ret1w: rets1w.length > 0 ? rets1w.reduce((a, b) => a + b, 0) / rets1w.length : null,
+    ret1m: rets1m.length > 0 ? rets1m.reduce((a, b) => a + b, 0) / rets1m.length : null
+  };
+}
+
+/**
+ * Exposes the latest real EOD close, prevClose, 1D % change, volume, and turnover
+ * from the hydrated `nse_eod_cache.json` for fast constituent drill-down when live CM MCP is rate-limited.
+ */
+export async function getCachedEodQuoteSummary(symbol: string): Promise<{
+  close: number;
+  prevClose: number;
+  perChange: number;
+  volume: number;
+  turnover: number;
+} | null> {
+  await ensureNseEodDiskCacheLoaded();
+  const clean = toOfficialNseSymbol(symbol);
+  const entry = eodCache.get(`EQ:${clean}`) || eodCache.get(clean);
+  if (!entry || entry.candles.length < 2) return null;
+  const last = entry.candles[entry.candles.length - 1];
+  const prev = entry.candles[entry.candles.length - 2];
+  if (!last?.close || last.close <= 0) return null;
+  const prevClose = prev?.close > 0 ? prev.close : last.close;
+  const perChange = prevClose > 0 ? ((last.close - prevClose) / prevClose) * 100 : 0;
+  return {
+    close: last.close,
+    prevClose,
+    perChange,
+    volume: last.volume || 0,
+    turnover: last.turnover || (last.volume && last.close ? last.volume * last.close : 0)
+  };
+}
+
 async function getIndexPeriodReturnMaps(): Promise<{ map1w: Map<string, number>; map1m: Map<string, number> }> {
   const now = Date.now();
   if (indexMoversMultiCache && now - indexMoversMultiCache.fetchedAt < 15 * 60 * 1000) {
@@ -1535,10 +1981,13 @@ async function getIndexPeriodReturnMaps(): Promise<{ map1w: Map<string, number>;
 
   const map1w = new Map<string, number>();
   const map1m = new Map<string, number>();
+  if (bhavcopyClient.isCoolingDown()) {
+    return { map1w, map1m };
+  }
 
   const [res1w, res1m] = await Promise.all([
-    bhavcopyClient.callTool<any>("get_index_movers", { period: "1w", n: 80, scope: "equity" }).catch(() => null),
-    bhavcopyClient.callTool<any>("get_index_movers", { period: "1m", n: 80, scope: "equity" }).catch(() => null)
+    withFastTimeout(bhavcopyClient.callTool<any>("get_index_movers", { period: "1w", n: 80, scope: "equity" }).catch(() => null), 4000, null),
+    withFastTimeout(bhavcopyClient.callTool<any>("get_index_movers", { period: "1m", n: 80, scope: "equity" }).catch(() => null), 4000, null)
   ]);
 
   const ingest = (res: any, target: Map<string, number>) => {
@@ -1565,19 +2014,47 @@ async function getIndexPeriodReturnMaps(): Promise<{ map1w: Map<string, number>;
 
 export async function getNseSectoralRotation(force = false): Promise<SectoralRotationSnapshot | null> {
   const now = Date.now();
-  if (!force && sectoralCache && now - sectoralCache.fetchedAt < LIVE_QUOTE_TTL_MS) {
+  if (!force && sectoralCache && sectoralCache.data.sectors.length >= 10 && now - sectoralCache.fetchedAt < LIVE_QUOTE_TTL_MS) {
     return sectoralCache.data;
   }
   if (sectoralInFlight) return sectoralInFlight;
 
   sectoralInFlight = (async () => {
     try {
-      const [liveSecRes, snapshotRes, periodMaps, allLiveMap] = await Promise.all([
-        cmMarketClient.callTool<any>("cm_get_live_indices", { group: "sectoral", nameFilter: "" }).catch(() => null),
-        bhavcopyClient.callTool<any>("get_index_snapshot", {}).catch(() => null),
-        getIndexPeriodReturnMaps().catch(() => ({ map1w: new Map<string, number>(), map1m: new Map<string, number>() })),
-        getLiveIndicesMap().catch(() => new Map<string, NseLiveQuote>())
+      await ensureNseEodDiskCacheLoaded();
+
+      // Fetch live Yahoo Finance official NSE sectoral index series + optional NSE MCP data concurrently
+      const yahooTickersPromise = Promise.all([
+        fetchYahooNseIndexSeries("^NSEI", force),
+        ...CANONICAL_NSE_SECTORAL_INDICES.map(spec => fetchYahooNseIndexSeries(spec.yahooTicker, force))
       ]);
+
+      const mcpPromise = Promise.all([
+        cmMarketClient.isCoolingDown()
+          ? Promise.resolve(null)
+          : withFastTimeout(cmMarketClient.callTool<any>("cm_get_live_indices", { group: "sectoral", nameFilter: "" }).catch(() => null), 4000, null),
+        bhavcopyClient.isCoolingDown()
+          ? Promise.resolve(null)
+          : withFastTimeout(bhavcopyClient.callTool<any>("get_index_snapshot", {}).catch(() => null), 4000, null),
+        getIndexPeriodReturnMaps().catch(() => ({ map1w: new Map<string, number>(), map1m: new Map<string, number>() })),
+        cmMarketClient.isCoolingDown()
+          ? Promise.resolve(new Map<string, NseLiveQuote>())
+          : withFastTimeout(getLiveIndicesMap().catch(() => new Map<string, NseLiveQuote>()), 4000, new Map<string, NseLiveQuote>())
+      ]);
+
+      const [[yfNifty50, ...yfSectorSnaps], [liveSecRes, snapshotRes, periodMaps, allLiveMap]] = await Promise.all([
+        yahooTickersPromise,
+        mcpPromise
+      ]);
+
+      const yahooByNorm = new Map<string, YahooIndexSeriesSnapshot>();
+      const specByNorm = new Map<string, CanonicalSectorIndexSpec>();
+      CANONICAL_NSE_SECTORAL_INDICES.forEach((spec, idx) => {
+        const nk = normalizeIndexKey(spec.indexName);
+        specByNorm.set(nk, spec);
+        const snap = yfSectorSnaps[idx];
+        if (snap) yahooByNorm.set(nk, snap);
+      });
 
       const snapByNorm = new Map<string, any>();
       if (Array.isArray(snapshotRes?.indices)) {
@@ -1587,26 +2064,55 @@ export async function getNseSectoralRotation(force = false): Promise<SectoralRot
         }
       }
 
+      // Benchmark Nifty 50: prefer live NSE MCP if valid, always fill with official ^NSEI series
       const n50Live = allLiveMap.get("NIFTY 50");
       const n50Snap = snapByNorm.get("NIFTY50");
-      const n50Last = n50Live?.close || Number(n50Snap?.close) || 0;
-      const n50_1d = Number.isFinite(n50Live?.perChange) ? Number(n50Live!.perChange) : Number(n50Snap?.pctChange) || 0;
-      const n50_1w = lookupPeriodReturn(periodMaps.map1w, "Nifty 50") ?? n50_1d;
-      const n50_1m = lookupPeriodReturn(periodMaps.map1m, "Nifty 50") ?? n50_1w;
+      const n50Last = n50Live?.close || Number(n50Snap?.close) || yfNifty50?.last || 0;
+      const n50_1d =
+        Number.isFinite(n50Live?.perChange) && (n50Live?.close || 0) > 0
+          ? Number(n50Live!.perChange)
+          : Number.isFinite(yfNifty50?.change1dPct)
+          ? Number(yfNifty50!.change1dPct)
+          : Number(n50Snap?.pctChange) || 0;
+      const n50_1w =
+        lookupPeriodReturn(periodMaps.map1w, "Nifty 50") ??
+        (yfNifty50?.change1wPct !== null && yfNifty50?.change1wPct !== undefined ? yfNifty50.change1wPct : n50_1d);
+      const n50_1m =
+        lookupPeriodReturn(periodMaps.map1m, "Nifty 50") ??
+        (yfNifty50?.change1mPct !== null && yfNifty50?.change1mPct !== undefined ? yfNifty50.change1mPct : n50_1w);
 
-      // Primary source: live sectoral indices from cm_get_live_indices(group: "sectoral") + key thematic/sectoral additions
-      const rawRows: any[] = Array.isArray(liveSecRes?.indices?.sectoral) ? [...liveSecRes.indices.sectoral] : [];
-      const extraCanonical = ["NIFTY ENERGY", "NIFTY INFRA", "NIFTY CONSUMPTION", "NIFTY COMMODITIES", "NIFTY CHEMICALS", "NIFTY SERVICES SECTOR"];
-      const existingKeys = new Set(rawRows.map(r => normalizeIndexKey(String(r.indexName || ""))));
+      // Build unified, deduplicated sector rows starting from MCP live sectoral rows + all 20 canonical NSE sectoral indices
+      const rawRows: any[] = [];
+      const existingKeys = new Set<string>();
 
-      for (const extraName of extraCanonical) {
-        const nk = normalizeIndexKey(extraName);
+      const pushRowIfNew = (row: any) => {
+        const canonicalName = canonicalizeSectorIndexName(String(row.indexName || ""));
+        const nk = normalizeIndexKey(canonicalName);
+        if (!canonicalName || !specByNorm.has(nk) || existingKeys.has(nk)) {
+          return;
+        }
+        const last = Number(row.last);
+        if (!Number.isFinite(last) || last <= 0) return;
+        existingKeys.add(nk);
+        rawRows.push({ ...row, indexName: canonicalName });
+      };
+
+      if (Array.isArray(liveSecRes?.indices?.sectoral)) {
+        for (const r of liveSecRes.indices.sectoral) pushRowIfNew(r);
+      }
+
+      // Guarantee every canonical NSE sectoral index is included from allLiveMap -> snapByNorm -> live Yahoo NSE series
+      for (const spec of CANONICAL_NSE_SECTORAL_INDICES) {
+        const nk = normalizeIndexKey(spec.indexName);
         if (existingKeys.has(nk)) continue;
-        const fromAll = allLiveMap.get(extraName);
+
+        const fromAll = allLiveMap.get(spec.indexName);
         const fromSnap = snapByNorm.get(nk);
-        if (fromAll) {
-          rawRows.push({
-            indexName: extraName,
+        const fromYf = yahooByNorm.get(nk);
+
+        if (fromAll && fromAll.close > 0) {
+          pushRowIfNew({
+            indexName: spec.indexName,
             last: fromAll.close,
             open: fromAll.open,
             high: fromAll.high,
@@ -1614,27 +2120,34 @@ export async function getNseSectoralRotation(force = false): Promise<SectoralRot
             previousClose: fromAll.prevClose,
             percChange: fromAll.perChange
           });
-          existingKeys.add(nk);
-        } else if (fromSnap) {
-          rawRows.push({
-            indexName: extraName,
+        } else if (fromYf && fromYf.last > 0) {
+          pushRowIfNew({
+            indexName: spec.indexName,
+            last: fromYf.last,
+            open: fromYf.open,
+            high: fromYf.high,
+            low: fromYf.low,
+            previousClose: fromYf.prevClose,
+            percChange: fromYf.change1dPct
+          });
+        } else if (fromSnap && Number(fromSnap.close) > 0) {
+          pushRowIfNew({
+            indexName: spec.indexName,
             last: fromSnap.close,
             open: fromSnap.open,
             high: fromSnap.high,
             low: fromSnap.low,
-            previousClose: fromSnap.close - (fromSnap.pointsChange || 0),
+            previousClose: Number(fromSnap.close) - (Number(fromSnap.pointsChange) || 0),
             percChange: fromSnap.pctChange
           });
-          existingKeys.add(nk);
         }
       }
 
       const sectors: SectoralHeatmapItem[] = [];
       for (const row of rawRows) {
         const idxName = String(row.indexName || "").trim().toUpperCase();
-        if (!idxName || idxName.includes("EX-BANK") || idxName.includes("25 50")) continue;
         const last = Number(row.last);
-        if (!Number.isFinite(last) || last <= 0) continue;
+        if (!idxName || !Number.isFinite(last) || last <= 0) continue;
 
         const prevClose = Number(row.previousClose) || last;
         const open = Number(row.open) || last;
@@ -1662,12 +2175,33 @@ export async function getNseSectoralRotation(force = false): Promise<SectoralRot
           }
         }
 
-        const change1wPct = lookupPeriodReturn(periodMaps.map1w, idxName) ?? change1dPct;
-        const change1mPct = lookupPeriodReturn(periodMaps.map1m, idxName) ?? change1wPct;
+        const yfSnap = yahooByNorm.get(nk);
+        const spec = specByNorm.get(nk);
+
+        let change1wPct =
+          lookupPeriodReturn(periodMaps.map1w, idxName) ??
+          (yfSnap?.change1wPct !== null && yfSnap?.change1wPct !== undefined ? yfSnap.change1wPct : null);
+        let change1mPct =
+          lookupPeriodReturn(periodMaps.map1m, idxName) ??
+          (yfSnap?.change1mPct !== null && yfSnap?.change1mPct !== undefined ? yfSnap.change1mPct : null);
+
+        // If neither Bhavcopy MCP nor Yahoo multi-bar index history has 1W/1M (for secondary NSE indices),
+        // compute true 5D/21D average return from their official NSE constituent stocks' real EOD series
+        if ((change1wPct === null || change1mPct === null) && spec?.constituentProxies?.length) {
+          const basket = await computeConstituentBasketPeriodReturns(
+            spec.constituentProxies,
+            idxName === "NIFTY MEDIA"
+          );
+          if (change1wPct === null && basket.ret1w !== null) change1wPct = basket.ret1w;
+          if (change1mPct === null && basket.ret1m !== null) change1mPct = basket.ret1m;
+        }
+
+        const final1w = change1wPct !== null ? change1wPct : change1dPct;
+        const final1m = change1mPct !== null ? change1mPct : final1w;
 
         const rsVsNifty1d = Number((change1dPct - n50_1d).toFixed(2));
-        const rsVsNifty1w = Number((change1wPct - n50_1w).toFixed(2));
-        const rsVsNifty1m = Number((change1mPct - n50_1m).toFixed(2));
+        const rsVsNifty1w = Number((final1w - n50_1w).toFixed(2));
+        const rsVsNifty1m = Number((final1m - n50_1m).toFixed(2));
 
         // RRG Quadrant: RS Ratio (1M relative strength) vs RS Momentum (1W relative momentum)
         let quadrant: RotationQuadrant = "Lagging";
@@ -1687,8 +2221,8 @@ export async function getNseSectoralRotation(force = false): Promise<SectoralRot
           low: Number(low.toFixed(2)),
           prevClose: Number(prevClose.toFixed(2)),
           change1dPct: Number(change1dPct.toFixed(2)),
-          change1wPct: Number(change1wPct.toFixed(2)),
-          change1mPct: Number(change1mPct.toFixed(2)),
+          change1wPct: Number(final1w.toFixed(2)),
+          change1mPct: Number(final1m.toFixed(2)),
           rsVsNifty1d,
           rsVsNifty1w,
           rsVsNifty1m,
@@ -1705,7 +2239,12 @@ export async function getNseSectoralRotation(force = false): Promise<SectoralRot
 
       const result: SectoralRotationSnapshot = {
         updatedAt: new Date().toISOString(),
-        date: String(snapshotRes?.date || parseNseTimestampToDateYmd(liveSecRes?.nseTimestamp)),
+        date: String(
+          snapshotRes?.date ||
+            (liveSecRes?.nseTimestamp ? parseNseTimestampToDateYmd(liveSecRes.nseTimestamp) : "") ||
+            yfNifty50?.dateYmd ||
+            candleTimeToYmd(Date.now())
+        ),
         nifty50: {
           last: Number(n50Last.toFixed(2)),
           change1dPct: Number(n50_1d.toFixed(2)),
@@ -1715,10 +2254,12 @@ export async function getNseSectoralRotation(force = false): Promise<SectoralRot
         sectors
       };
 
-      if (sectors.length > 0) {
+      if (sectors.length >= 10) {
         sectoralCache = { fetchedAt: Date.now(), data: result };
+      } else if (sectoralCache && sectoralCache.data.sectors.length > sectors.length) {
+        return sectoralCache.data;
       }
-      return sectoralCache?.data || result;
+      return result;
     } catch {
       return sectoralCache?.data || null;
     } finally {

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   ExternalLink,
   Search,
@@ -25,6 +25,7 @@ import {
   LayaSelfLearnedState,
 } from "../lib/laya-engine.js";
 import { LayaIntelCell } from "./LayaIntelCell.js";
+import { safeParseJson } from "../lib/safe-fetch.js";
 
 interface D1ToD4LayaDashboardProps {
   personalSymbols: string[];
@@ -61,6 +62,7 @@ export default function D1ToD4LayaDashboard({ personalSymbols }: D1ToD4LayaDashb
   // Pagination
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(250);
+  const fetchAbortRef = useRef<AbortController | null>(null);
 
   const getTradingViewUrl = (symbol: string) => {
     try {
@@ -105,6 +107,12 @@ export default function D1ToD4LayaDashboard({ personalSymbols }: D1ToD4LayaDashb
   };
 
   const fetchDashboardData = async () => {
+    if (fetchAbortRef.current) {
+      fetchAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    fetchAbortRef.current = controller;
+
     setIsLoading(true);
     setErrorMessage(null);
     const targets = getTargetSymbols();
@@ -116,30 +124,102 @@ export default function D1ToD4LayaDashboard({ personalSymbols }: D1ToD4LayaDashb
     }
 
     try {
-      const symbolsQuery = targets.join(",");
-      const response = await fetch(`/api/wt-dashboard?symbols=${encodeURIComponent(symbolsQuery)}`);
-      if (!response.ok) {
-        throw new Error(`HTTP fetch error ${response.status}`);
+      const chunkSize = 50;
+      const chunks: string[][] = [];
+      for (let i = 0; i < targets.length; i += chunkSize) {
+        chunks.push(targets.slice(i, i + chunkSize));
       }
-      const resJson = await response.json();
-      if (resJson.status === "ok" && Array.isArray(resJson.data)) {
-        if (resJson.layaLearnedState) {
-          setGlobalLayaLearnedState(resJson.layaLearnedState);
+
+      const mergedMap = new Map<string, any>();
+      const emitRows = () => {
+        if (controller.signal.aborted) return;
+        const ordered: any[] = [];
+        for (const sym of targets) {
+          const row = mergedMap.get(sym);
+          if (row) ordered.push(row);
         }
-        setSymbolsData(resJson.data);
-      } else {
-        throw new Error(resJson.message || "Invalid data payload returned by server");
+        setSymbolsData(ordered);
+      };
+
+      const mergeRows = (rows: any[]) => {
+        for (const row of rows) {
+          if (!row?.Symbol) continue;
+          const prev = mergedMap.get(row.Symbol);
+          if (prev) {
+            mergedMap.set(row.Symbol, {
+              ...prev,
+              ...row,
+              timeframes: {
+                ...(prev.timeframes || {}),
+                ...(row.timeframes || {}),
+              },
+            });
+          } else {
+            mergedMap.set(row.Symbol, row);
+          }
+        }
+      };
+
+      const runWave = async (
+        tfParam: string | null,
+        concurrency: number,
+        releaseOnFirst: boolean
+      ) => {
+        let cursor = 0;
+        let released = false;
+        const worker = async () => {
+          while (cursor < chunks.length && !controller.signal.aborted) {
+            const idx = cursor++;
+            const slice = chunks[idx];
+            const url = tfParam
+              ? `/api/wt-dashboard?symbols=${encodeURIComponent(slice.join(","))}&timeframes=${encodeURIComponent(tfParam)}`
+              : `/api/wt-dashboard?symbols=${encodeURIComponent(slice.join(","))}`;
+            try {
+              const response = await fetch(url, { signal: controller.signal });
+              const resJson = await safeParseJson<any>(response);
+              if (controller.signal.aborted) return;
+              if (resJson?.status === "ok" && Array.isArray(resJson.data)) {
+                if (resJson.layaLearnedState) {
+                  setGlobalLayaLearnedState(resJson.layaLearnedState);
+                }
+                mergeRows(resJson.data);
+                emitRows();
+                if (releaseOnFirst && !released) {
+                  released = true;
+                  setIsLoading(false);
+                }
+              }
+            } catch (e: any) {
+              if (e?.name === "AbortError") return;
+            }
+          }
+        };
+        await Promise.all(Array.from({ length: Math.min(concurrency, chunks.length) }, () => worker()));
+      };
+
+      await runWave("1D,3D,1W", 4, true);
+      if (!controller.signal.aborted) {
+        setIsLoading(false);
+        runWave(null, 2, false).catch(() => {});
       }
     } catch (error: any) {
+      if (error?.name === "AbortError") return;
       console.error("Error fetching D1-D4 Laya data:", error);
       setErrorMessage(error.message || "Failed loading D1-D4 Laya Combined dataset.");
     } finally {
-      setIsLoading(false);
+      if (!controller.signal.aborted) {
+        setIsLoading(false);
+      }
     }
   };
 
   useEffect(() => {
     fetchDashboardData();
+    return () => {
+      if (fetchAbortRef.current) {
+        fetchAbortRef.current.abort();
+      }
+    };
   }, [activeWatchlist, personalSymbols.length, searchQuery, displayPage, pageSize]);
 
   useEffect(() => {
@@ -479,7 +559,7 @@ export default function D1ToD4LayaDashboard({ personalSymbols }: D1ToD4LayaDashb
       <div className="bg-[#0b0c10] border border-[#1f2229] rounded-xl overflow-hidden shadow-2xl relative">
         <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-emerald-500 via-cyan-500 to-amber-500" />
 
-        {isLoading ? (
+        {isLoading && symbolsData.length === 0 ? (
           <div className="py-24 flex flex-col items-center justify-center space-y-4">
             <RefreshCw className="h-8 w-8 text-emerald-400 animate-spin" />
             <p className="text-sm font-semibold text-zinc-400 font-sans tracking-wide">
